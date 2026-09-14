@@ -1,0 +1,65 @@
+version: 2
+
+project_name: wallapop
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: wallapop
+    main: .
+    binary: wallapop
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - "^chore"
+      - "^ci"
+      - "^docs"
+
+release:
+  github:
+    owner: Microck
+    name: wallapop-cli
+  draft: false
+  prerelease: auto
+
+homebrew_casks:
+  - name: wallapop
+    repository:
+      owner: Microck
+      name: homebrew-tap
+    homepage: https://github.com/Microck/wallapop-cli
+    description: Terminal CLI for Wallapop
+    license: MIT
+
+scoops:
+  - name: wallapop
+    repository:
+      owner: Microck
+      name: scoop-bucket
+    homepage: https://github.com/Microck/wallapop-cli
+    description: Terminal CLI for Wallapop
+    license: MIT

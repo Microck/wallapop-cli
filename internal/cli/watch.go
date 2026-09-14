@@ -1,0 +1,776 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/Microck/wallapop-cli/internal/config"
+	"github.com/Microck/wallapop-cli/internal/output"
+	"github.com/Microck/wallapop-cli/internal/sink"
+	"github.com/Microck/wallapop-cli/internal/store"
+	"github.com/Microck/wallapop-cli/internal/wallapop"
+	"github.com/Microck/wallapop-cli/internal/watch"
+)
+
+const (
+	defaultInterval = 5 * time.Minute
+	minInterval     = 30 * time.Second
+)
+
+func (a *App) watchCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "watch",
+		Short: "Track searches, items and sellers and get events when they change",
+		Long: `Track searches, items and sellers and get events when they change.
+
+A watch is local. "check" runs every due watch once, prints new events and
+delivers them to the watch's sinks; "run" loops in the foreground; "service"
+installs a systemd timer or launchd agent that runs "check" on a schedule.
+
+Examples:
+  wallapop watch add search "thinkpad x1" --max-price 400 --name x1 --notify phone
+  wallapop watch add item https://es.wallapop.com/item/... --name that-bike
+  wallapop watch add seller p8j35kmwr7z9 --name good-seller
+  wallapop watch add search patinete --max-price 100 --name pat --emit-initial   # seed a feed
+  wallapop watch check --all --format jsonl | jq -r 'select(.type=="item.new") | .item.url'
+  wallapop watch run --interval 2m
+  wallapop watch service install --interval 10m`,
+	}
+	add := &cobra.Command{Use: "add", Short: "Create a watch"}
+	add.AddCommand(a.watchAddSearchCmd(), a.watchAddItemCmd(), a.watchAddSellerCmd())
+	cmd.AddCommand(add, a.watchListCmd(), a.watchRemoveCmd(), a.watchCheckCmd(), a.watchRunCmd(), a.watchEventsCmd(), a.watchServiceCmd())
+	return cmd
+}
+
+type watchAddFlags struct {
+	name        string
+	notify      []string
+	interval    time.Duration
+	pages       int
+	emitInitial bool
+}
+
+func (a *App) bindWatchAddFlags(cmd *cobra.Command, f *watchAddFlags, pages bool) {
+	cmd.Flags().StringVar(&f.name, "name", "", "watch name (required, used in events and commands)")
+	cmd.Flags().StringSliceVar(&f.notify, "notify", nil, "sink names from config, repeatable")
+	cmd.Flags().DurationVar(&f.interval, "interval", 0, "how often this watch is due (default from config, 5m; floor 30s)")
+	if pages {
+		cmd.Flags().IntVar(&f.pages, "pages", 1, "result pages to diff per check")
+	}
+	cmd.Flags().BoolVar(&f.emitInitial, "emit-initial", false, "report everything that exists now as events instead of baselining silently")
+	_ = cmd.MarkFlagRequired("name")
+}
+
+func (a *App) configuredInterval(flag time.Duration) (time.Duration, error) {
+	iv := flag
+	if iv == 0 && a.Cfg.Watch.Interval != "" {
+		d, err := time.ParseDuration(a.Cfg.Watch.Interval)
+		if err != nil {
+			return 0, fmt.Errorf("config watch.interval: %w", err)
+		}
+		iv = d
+	}
+	if iv == 0 {
+		iv = defaultInterval
+	}
+	if iv < minInterval {
+		return 0, output.Usagef("interval %s is below the floor of %s", iv, minInterval)
+	}
+	return iv, nil
+}
+
+func (a *App) checkSinks(names []string) error {
+	for _, n := range names {
+		s, ok := a.Cfg.Sinks[n]
+		if !ok {
+			return output.Usagef("sink %q is not in config. Define [sinks.%s] in %s", n, n, a.Paths.ConfigFile)
+		}
+		if err := sink.Validate(n, s); err != nil {
+			return output.Usagef("%v", err)
+		}
+	}
+	return nil
+}
+
+func (a *App) addWatch(ctx context.Context, kind string, target any, f watchAddFlags) error {
+	if !validWatchName(f.name) {
+		return output.Usagef("watch name %q must be letters, digits, - or _", f.name)
+	}
+	iv, err := a.configuredInterval(f.interval)
+	if err != nil {
+		return err
+	}
+	if err := a.checkSinks(f.notify); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(target)
+	if err != nil {
+		return err
+	}
+	st, err := a.Store()
+	if err != nil {
+		return err
+	}
+	w, err := st.AddWatch(ctx, store.Watch{Name: f.name, Profile: a.Profile, Kind: kind, Target: raw, Sinks: f.notify, Interval: iv, Pages: f.pages})
+	if errors.Is(err, store.ErrExists) {
+		return output.Usagef("watch %q already exists. Remove it first or pick another name", f.name)
+	}
+	if err != nil {
+		return err
+	}
+	// Baseline now so the first scheduled check only reports real changes.
+	// With --emit-initial the baseline itself is reported and delivered.
+	res, err := watch.Check(ctx, a.Client, st, w, f.emitInitial)
+	if err != nil {
+		return err
+	}
+	if f.emitInitial {
+		for _, ev := range res.Events {
+			for _, name := range w.Sinks {
+				if err := sink.Deliver(ctx, name, a.Cfg.Sinks[name], ev); err != nil {
+					fmt.Fprintf(a.Stderr, "wallapop: sink %s: %v\n", name, err)
+				}
+			}
+		}
+	}
+	if err := st.CommitCheck(ctx, w.ID, res.Upserts, res.Removed, res.Events); err != nil {
+		return err
+	}
+	if f.emitInitial {
+		return a.Printer.Print(eventList(res.Events))
+	}
+	w.Baselined = true
+	return a.Printer.Print(watchView{Watch: w, Seen: len(res.Upserts)})
+}
+
+func validWatchName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !(r == '-' || r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) watchAddSearchCmd() *cobra.Command {
+	var sf searchFlags
+	var wf watchAddFlags
+	cmd := &cobra.Command{
+		Use: "search [keywords...]", Short: "Watch a search for new items and price changes",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p, err := a.toParams(cmd, args, sf)
+			if err != nil {
+				return err
+			}
+			return a.addWatch(cmd.Context(), store.KindSearch, watch.SearchTarget{Params: p}, wf)
+		},
+	}
+	a.bindSearchFlags(cmd, &sf)
+	a.bindWatchAddFlags(cmd, &wf, true)
+	return cmd
+}
+
+func (a *App) watchAddItemCmd() *cobra.Command {
+	var wf watchAddFlags
+	cmd := &cobra.Command{
+		Use: "item ITEM", Short: "Watch one item for price, reserved, sold, removed", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			it, err := a.Client.Item(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			return a.addWatch(cmd.Context(), store.KindItem, watch.ItemTarget{Hash: it.Hash, URL: it.URL}, wf)
+		},
+	}
+	a.bindWatchAddFlags(cmd, &wf, false)
+	return cmd
+}
+
+func (a *App) watchAddSellerCmd() *cobra.Command {
+	var wf watchAddFlags
+	cmd := &cobra.Command{
+		Use: "seller USER", Short: "Watch a seller for new and removed items", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			hash, err := a.Client.ResolveUserHash(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			u, err := a.Client.User(cmd.Context(), hash)
+			if err != nil {
+				return err
+			}
+			return a.addWatch(cmd.Context(), store.KindSeller, watch.SellerTarget{Hash: hash, Name: u.Name}, wf)
+		},
+	}
+	a.bindWatchAddFlags(cmd, &wf, false)
+	return cmd
+}
+
+type watchView struct {
+	store.Watch
+	Seen int `json:"seen,omitempty"`
+}
+
+func describeTarget(w store.Watch) string {
+	switch w.Kind {
+	case store.KindSearch:
+		var t watch.SearchTarget
+		_ = json.Unmarshal(w.Target, &t)
+		return t.Params.String()
+	case store.KindItem:
+		var t watch.ItemTarget
+		_ = json.Unmarshal(w.Target, &t)
+		return t.Hash
+	case store.KindSeller:
+		var t watch.SellerTarget
+		_ = json.Unmarshal(w.Target, &t)
+		return strings.TrimSpace(t.Name + " " + t.Hash)
+	}
+	return ""
+}
+
+func (v watchView) Pretty(w io.Writer, color bool) {
+	watchList{v.Watch}.Pretty(w, color)
+}
+
+type watchList []store.Watch
+
+func (l watchList) Pretty(w io.Writer, color bool) {
+	rows := make([][]string, 0, len(l))
+	for _, wt := range l {
+		last := "never"
+		if !wt.LastCheckAt.IsZero() {
+			last = relTime(wt.LastCheckAt)
+		}
+		rows = append(rows, []string{wt.Name, wt.Kind, output.Truncate(describeTarget(wt), 40), wt.Interval.String(), strings.Join(wt.Sinks, ","), last, output.Dim(wt.Profile, color)})
+	}
+	output.Table(w, color, []string{"WATCH", "KIND", "TARGET", "EVERY", "SINKS", "CHECKED", "PROFILE"}, rows)
+}
+
+func (a *App) watchListCmd() *cobra.Command {
+	var all bool
+	cmd := &cobra.Command{
+		Use: "list", Short: "List watches for the active profile", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := a.Store()
+			if err != nil {
+				return err
+			}
+			profile := a.Profile
+			if all {
+				profile = ""
+			}
+			ws, err := st.Watches(cmd.Context(), profile)
+			if err != nil {
+				return err
+			}
+			if ws == nil {
+				ws = []store.Watch{}
+			}
+			return a.Printer.Print(watchList(ws))
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all-profiles", false, "include every profile's watches")
+	return cmd
+}
+
+func (a *App) watchRemoveCmd() *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use: "remove NAME", Short: "Delete a watch and its history", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := a.Store()
+			if err != nil {
+				return err
+			}
+			if err := a.confirm(yes, fmt.Sprintf("Remove watch %q and its event history?", args[0])); err != nil {
+				return err
+			}
+			if err := st.RemoveWatch(cmd.Context(), args[0]); errors.Is(err, store.ErrNotFound) {
+				return wallapop.NotFound("no watch named %q", args[0])
+			} else if err != nil {
+				return err
+			}
+			return a.Printer.Print(map[string]string{"removed": args[0]})
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "do not prompt")
+	return cmd
+}
+
+type eventList []store.Event
+
+func (l eventList) Pretty(w io.Writer, color bool) {
+	rows := make([][]string, 0, len(l))
+	for _, ev := range l {
+		title, body, link := sink.Summary(ev)
+		rows = append(rows, []string{output.Dim(ev.At.Local().Format("01-02 15:04"), color), ev.Watch, ev.Type, output.Truncate(title, 40), output.Truncate(body, 24), output.Dim(link, color)})
+	}
+	output.Table(w, color, []string{"WHEN", "WATCH", "EVENT", "ITEM", "DETAIL", "URL"}, rows)
+}
+
+// runChecks checks the given watches, delivers events, commits, and returns
+// every event produced. Per-watch failures are reported on stderr and do not
+// stop the others; the first failure is returned so the exit code reflects it.
+func (a *App) runChecks(ctx context.Context, st *store.Store, ws []store.Watch) ([]store.Event, error) {
+	var all []store.Event
+	var firstErr error
+	for _, w := range ws {
+		res, err := watch.Check(ctx, a.Client, st, w, false)
+		if err != nil {
+			if ctx.Err() != nil {
+				return all, ctx.Err()
+			}
+			fmt.Fprintf(a.Stderr, "wallapop: watch %s: %v\n", w.Name, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for _, ev := range res.Events {
+			for _, name := range w.Sinks {
+				if err := sink.Deliver(ctx, name, a.Cfg.Sinks[name], ev); err != nil {
+					fmt.Fprintf(a.Stderr, "wallapop: sink %s: %v\n", name, err)
+				}
+			}
+		}
+		if err := st.CommitCheck(ctx, w.ID, res.Upserts, res.Removed, res.Events); err != nil {
+			return all, err
+		}
+		all = append(all, res.Events...)
+	}
+	return all, firstErr
+}
+
+// selectWatches picks named watches, or the due ones (or all with force).
+func (a *App) selectWatches(ctx context.Context, st *store.Store, names []string, force bool) ([]store.Watch, error) {
+	if len(names) > 0 {
+		var out []store.Watch
+		for _, n := range names {
+			w, err := st.Watch(ctx, n)
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, wallapop.NotFound("no watch named %q", n)
+			} else if err != nil {
+				return nil, err
+			}
+			out = append(out, w)
+		}
+		return out, nil
+	}
+	ws, err := st.Watches(ctx, a.Profile)
+	if err != nil {
+		return nil, err
+	}
+	if force {
+		return ws, nil
+	}
+	now := time.Now()
+	due := ws[:0]
+	for _, w := range ws {
+		if w.LastCheckAt.IsZero() || now.Sub(w.LastCheckAt) >= w.Interval {
+			due = append(due, w)
+		}
+	}
+	return due, nil
+}
+
+func (a *App) watchCheckCmd() *cobra.Command {
+	var all bool
+	cmd := &cobra.Command{
+		Use:   "check [NAME...]",
+		Short: "Run due watches once and print their events",
+		Long: `Run watches once. With names, those watches run regardless of schedule. Without
+names, watches whose interval has elapsed run; --all forces every watch.
+Prints the events produced (none is fine: exit 0) and delivers them to sinks.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := a.Store()
+			if err != nil {
+				return err
+			}
+			ws, err := a.selectWatches(cmd.Context(), st, args, all)
+			if err != nil {
+				return err
+			}
+			events, err := a.runChecks(cmd.Context(), st, ws)
+			if events == nil {
+				events = []store.Event{}
+			}
+			if perr := a.Printer.Print(eventList(events)); perr != nil {
+				return perr
+			}
+			return err
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "run every watch of the profile, due or not")
+	return cmd
+}
+
+func (a *App) watchRunCmd() *cobra.Command {
+	var interval time.Duration
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "Check due watches in a loop until Ctrl-C",
+		Long: `Foreground loop. Every tick runs the due watches and prints events as they
+happen (use --format jsonl to stream). The tick defaults to the shortest watch
+interval, floored at 30s, with up to 10% jitter.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			st, err := a.Store()
+			if err != nil {
+				return err
+			}
+			if interval != 0 && interval < minInterval {
+				return output.Usagef("--interval %s is below the floor of %s", interval, minInterval)
+			}
+			for {
+				ws, err := a.selectWatches(ctx, st, nil, false)
+				if err != nil {
+					return err
+				}
+				events, err := a.runChecks(ctx, st, ws)
+				if ctx.Err() != nil {
+					return nil
+				}
+				if err != nil {
+					var we *wallapop.Error
+					if errors.As(err, &we) && we.Kind == wallapop.KindAuth {
+						return err
+					}
+				}
+				for _, ev := range events {
+					if err := a.Printer.Print(ev); err != nil {
+						return err
+					}
+				}
+				tick := interval
+				if tick == 0 {
+					tick = a.shortestInterval(ctx, st)
+				}
+				tick += watch.Jitter(tick, time.Now().UnixNano())
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(tick):
+				}
+			}
+		},
+	}
+	cmd.Flags().DurationVar(&interval, "interval", 0, "tick length (default: shortest watch interval)")
+	return cmd
+}
+
+func (a *App) shortestInterval(ctx context.Context, st *store.Store) time.Duration {
+	ws, err := st.Watches(ctx, a.Profile)
+	if err != nil || len(ws) == 0 {
+		return defaultInterval
+	}
+	min := ws[0].Interval
+	for _, w := range ws[1:] {
+		if w.Interval < min {
+			min = w.Interval
+		}
+	}
+	if min < minInterval {
+		return minInterval
+	}
+	return min
+}
+
+func (a *App) watchEventsCmd() *cobra.Command {
+	var since time.Duration
+	var limit int
+	cmd := &cobra.Command{
+		Use: "events [NAME]", Short: "Show stored events, newest first", Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := a.Store()
+			if err != nil {
+				return err
+			}
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			}
+			var from time.Time
+			if since > 0 {
+				from = time.Now().Add(-since)
+			}
+			evs, err := st.Events(cmd.Context(), a.Profile, name, from, limit)
+			if err != nil {
+				return err
+			}
+			if evs == nil {
+				evs = []store.Event{}
+			}
+			return a.Printer.Print(eventList(evs))
+		},
+	}
+	cmd.Flags().DurationVar(&since, "since", 0, "only events newer than this (e.g. 24h)")
+	cmd.Flags().IntVar(&limit, "limit", 100, "maximum events")
+	return cmd
+}
+
+// service: OS scheduler integration. No daemon; the scheduler runs `watch check`.
+
+func (a *App) watchServiceCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "service", Short: "Run checks on a schedule via systemd (Linux) or launchd (macOS)"}
+	var interval time.Duration
+	install := &cobra.Command{
+		Use: "install", Short: "Install a user-level timer that runs `watch check --all`", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			iv, err := a.configuredInterval(interval)
+			if err != nil {
+				return err
+			}
+			return a.serviceInstall(iv)
+		},
+	}
+	install.Flags().DurationVar(&interval, "interval", 0, "timer period (default from config, 5m)")
+	cmd.AddCommand(install,
+		&cobra.Command{Use: "uninstall", Short: "Remove the timer", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error { return a.serviceUninstall() }},
+		&cobra.Command{Use: "status", Short: "Show the timer's state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error { return a.serviceStatus() }},
+	)
+	return cmd
+}
+
+type serviceView struct {
+	Platform string   `json:"platform"`
+	Unit     string   `json:"unit,omitempty"`
+	Files    []string `json:"files,omitempty"`
+	Command  string   `json:"command,omitempty"`
+	State    string   `json:"state,omitempty"`
+	Hint     string   `json:"hint,omitempty"`
+}
+
+func (v serviceView) Pretty(w io.Writer, color bool) {
+	rows := [][]string{{"platform", v.Platform}}
+	if v.Unit != "" {
+		rows = append(rows, []string{"unit", v.Unit})
+	}
+	for _, f := range v.Files {
+		rows = append(rows, []string{"file", f})
+	}
+	if v.State != "" {
+		rows = append(rows, []string{"state", v.State})
+	}
+	if v.Command != "" {
+		rows = append(rows, []string{"command", v.Command})
+	}
+	output.Table(w, color, nil, rows)
+	if v.Hint != "" {
+		fmt.Fprintln(w, v.Hint)
+	}
+}
+
+func (a *App) serviceUnitName() string { return "wallapop-watch-" + a.Profile }
+
+func (a *App) serviceCommandLine() (string, []string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", nil, err
+	}
+	args := []string{"watch", "check", "--all", "--profile", a.Profile, "--format", "jsonl"}
+	return exe, args, nil
+}
+
+func (a *App) serviceInstall(iv time.Duration) error {
+	exe, args, err := a.serviceCommandLine()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(a.Paths.StateDir, 0o700); err != nil {
+		return err
+	}
+	logFile := filepath.Join(a.Paths.StateDir, a.serviceUnitName()+".log")
+	switch runtime.GOOS {
+	case "linux":
+		dir := filepath.Join(config.UserHome(), ".config", "systemd", "user")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		name := a.serviceUnitName()
+		service := fmt.Sprintf("[Unit]\nDescription=wallapop-cli watch checks (%s)\n\n[Service]\nType=oneshot\nExecStart=%s %s\nStandardOutput=append:%s\nStandardError=append:%s\n",
+			a.Profile, exe, strings.Join(args, " "), logFile, logFile)
+		timer := fmt.Sprintf("[Unit]\nDescription=wallapop-cli watch timer (%s)\n\n[Timer]\nOnBootSec=2m\nOnUnitActiveSec=%s\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n", a.Profile, formatSystemd(iv))
+		sf, tf := filepath.Join(dir, name+".service"), filepath.Join(dir, name+".timer")
+		if err := os.WriteFile(sf, []byte(service), 0o644); err != nil {
+			return err
+		}
+		if err := os.WriteFile(tf, []byte(timer), 0o644); err != nil {
+			return err
+		}
+		if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
+			return fmt.Errorf("systemctl daemon-reload: %v: %s", err, out)
+		}
+		if out, err := exec.Command("systemctl", "--user", "enable", "--now", name+".timer").CombinedOutput(); err != nil {
+			return fmt.Errorf("systemctl enable: %v: %s", err, out)
+		}
+		return a.Printer.Print(serviceView{Platform: "systemd", Unit: name + ".timer", Files: []string{sf, tf}, State: "enabled", Hint: "logs: " + logFile})
+	case "darwin":
+		label := "dev.micr.wallapop-cli." + a.Profile
+		dir := filepath.Join(config.UserHome(), "Library", "LaunchAgents")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		var progArgs strings.Builder
+		for _, s := range append([]string{exe}, args...) {
+			progArgs.WriteString("    <string>" + s + "</string>\n")
+		}
+		plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>%s</string>
+  <key>ProgramArguments</key><array>
+%s  </array>
+  <key>StartInterval</key><integer>%d</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>%s</string>
+  <key>StandardErrorPath</key><string>%s</string>
+</dict></plist>
+`, label, progArgs.String(), int(iv.Seconds()), logFile, logFile)
+		pf := filepath.Join(dir, label+".plist")
+		if err := os.WriteFile(pf, []byte(plist), 0o644); err != nil {
+			return err
+		}
+		_ = exec.Command("launchctl", "unload", pf).Run()
+		if out, err := exec.Command("launchctl", "load", pf).CombinedOutput(); err != nil {
+			return fmt.Errorf("launchctl load: %v: %s", err, out)
+		}
+		return a.Printer.Print(serviceView{Platform: "launchd", Unit: label, Files: []string{pf}, State: "loaded", Hint: "logs: " + logFile})
+	default:
+		cmdline := fmt.Sprintf(`schtasks /Create /SC MINUTE /MO %d /TN "%s" /TR "\"%s\" %s"`, int(iv.Minutes()), a.serviceUnitName(), exe, strings.Join(args, " "))
+		return a.Printer.Print(serviceView{Platform: runtime.GOOS, Command: cmdline, Hint: "scheduled install is not automated on this platform; run the command above yourself"})
+	}
+}
+
+func formatSystemd(d time.Duration) string {
+	if d%time.Minute == 0 {
+		return strconv.Itoa(int(d.Minutes())) + "min"
+	}
+	return strconv.Itoa(int(d.Seconds())) + "s"
+}
+
+func (a *App) serviceUninstall() error {
+	switch runtime.GOOS {
+	case "linux":
+		name := a.serviceUnitName()
+		_ = exec.Command("systemctl", "--user", "disable", "--now", name+".timer").Run()
+		dir := filepath.Join(config.UserHome(), ".config", "systemd", "user")
+		_ = os.Remove(filepath.Join(dir, name+".service"))
+		_ = os.Remove(filepath.Join(dir, name+".timer"))
+		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+		return a.Printer.Print(serviceView{Platform: "systemd", Unit: name + ".timer", State: "removed"})
+	case "darwin":
+		label := "dev.micr.wallapop-cli." + a.Profile
+		pf := filepath.Join(config.UserHome(), "Library", "LaunchAgents", label+".plist")
+		_ = exec.Command("launchctl", "unload", pf).Run()
+		_ = os.Remove(pf)
+		return a.Printer.Print(serviceView{Platform: "launchd", Unit: label, State: "removed"})
+	}
+	return a.Printer.Print(serviceView{Platform: runtime.GOOS, Command: fmt.Sprintf(`schtasks /Delete /TN "%s" /F`, a.serviceUnitName()), Hint: "run the command above yourself"})
+}
+
+func (a *App) serviceStatus() error {
+	switch runtime.GOOS {
+	case "linux":
+		name := a.serviceUnitName()
+		out, _ := exec.Command("systemctl", "--user", "is-active", name+".timer").Output()
+		state := strings.TrimSpace(string(out))
+		if state == "" {
+			state = "not installed"
+		}
+		return a.Printer.Print(serviceView{Platform: "systemd", Unit: name + ".timer", State: state})
+	case "darwin":
+		label := "dev.micr.wallapop-cli." + a.Profile
+		state := "not loaded"
+		if err := exec.Command("launchctl", "list", label).Run(); err == nil {
+			state = "loaded"
+		}
+		return a.Printer.Print(serviceView{Platform: "launchd", Unit: label, State: state})
+	}
+	return a.Printer.Print(serviceView{Platform: runtime.GOOS, Command: fmt.Sprintf(`schtasks /Query /TN "%s"`, a.serviceUnitName())})
+}
+
+// sink commands
+
+type sinkRow struct {
+	Name string `json:"name"`
+	config.SinkConfig
+	Error string `json:"error,omitempty"`
+}
+
+type sinkList []sinkRow
+
+func (l sinkList) Pretty(w io.Writer, color bool) {
+	rows := make([][]string, 0, len(l))
+	for _, s := range l {
+		target := s.URL
+		if s.Type == "ntfy" {
+			target = strings.TrimRight(s.URL, "/") + "/" + s.Topic
+		}
+		if s.Type == "exec" {
+			target = strings.Join(s.Command, " ")
+		}
+		rows = append(rows, []string{s.Name, s.Type, output.Truncate(target, 50), s.Error})
+	}
+	output.Table(w, color, []string{"SINK", "TYPE", "TARGET", "PROBLEM"}, rows)
+}
+
+func (a *App) sinkCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "sink", Short: "Notification targets declared in config"}
+	cmd.AddCommand(
+		&cobra.Command{
+			Use: "list", Short: "List configured sinks and validation problems", Args: cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				list := sinkList{}
+				for name, s := range a.Cfg.Sinks {
+					row := sinkRow{Name: name, SinkConfig: s}
+					if err := sink.Validate(name, s); err != nil {
+						row.Error = err.Error()
+					}
+					list = append(list, row)
+				}
+				for i := 1; i < len(list); i++ {
+					for j := i; j > 0 && list[j].Name < list[j-1].Name; j-- {
+						list[j], list[j-1] = list[j-1], list[j]
+					}
+				}
+				return a.Printer.Print(list)
+			},
+		},
+		&cobra.Command{
+			Use: "test NAME", Short: "Send a synthetic event to a sink", Args: cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				s, ok := a.Cfg.Sinks[args[0]]
+				if !ok {
+					return output.Usagef("sink %q is not in config", args[0])
+				}
+				if err := sink.Validate(args[0], s); err != nil {
+					return output.Usagef("%v", err)
+				}
+				item, _ := json.Marshal(wallapop.Item{Hash: "test00000000", Title: "wallapop-cli sink test", Price: 42, Currency: "EUR", URL: "https://github.com/Microck/wallapop-cli"})
+				ev := store.Event{Type: "item.new", Watch: "sink-test", Profile: a.Profile, At: time.Now().UTC(), Item: item}
+				if err := sink.Deliver(cmd.Context(), args[0], s, ev); err != nil {
+					return err
+				}
+				return a.Printer.Print(map[string]any{"sink": args[0], "delivered": true})
+			},
+		},
+	)
+	return cmd
+}

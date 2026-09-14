@@ -1,0 +1,22 @@
+#!/bin/sh
+# Installs the latest wallapop release binary into ~/.local/bin (or $WALLAPOP_INSTALL_DIR).
+set -eu
+repo="Microck/wallapop-cli"
+dir="${WALLAPOP_INSTALL_DIR:-$HOME/.local/bin}"
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+arch=$(uname -m)
+case "$arch" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *) echo "unsupported arch: $arch" >&2; exit 1 ;; esac
+tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+[ -n "$tag" ] || { echo "could not find the latest release" >&2; exit 1; }
+version=${tag#v}
+asset="wallapop_${version}_${os}_${arch}.tar.gz"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+curl -fsSL "https://github.com/$repo/releases/download/$tag/$asset" -o "$tmp/$asset"
+curl -fsSL "https://github.com/$repo/releases/download/$tag/checksums.txt" -o "$tmp/checksums.txt"
+(cd "$tmp" && grep " $asset\$" checksums.txt | sha256sum -c - >/dev/null)
+tar -xzf "$tmp/$asset" -C "$tmp" wallapop
+mkdir -p "$dir"
+install -m 0755 "$tmp/wallapop" "$dir/wallapop"
+echo "installed wallapop $version to $dir/wallapop"
+case ":$PATH:" in *":$dir:"*) ;; *) echo "add $dir to your PATH" ;; esac
