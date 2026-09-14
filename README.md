@@ -66,7 +66,7 @@ the cli keeps only that cookie and your device id, in a 0600 file under `~/.conf
 
 | command | what it does |
 |---|---|
-| `auth login / status / logout` | import, inspect or forget a session |
+| `auth login / status / refresh / logout` | import, inspect, renew or forget a session (it slides 30 days on every authenticated command) |
 | `profile list / use / remove` | several accounts side by side |
 | `search [keywords] [--filter k=v]...` | search around your location; `search filters` lists valid keys |
 | `category list` | category ids |

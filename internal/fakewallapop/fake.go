@@ -284,7 +284,8 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "__Secure-next-auth.session-token", Value: RotatedCookie, Path: "/", HttpOnly: true, Secure: true})
+	// The real route re-issues the cookie with a fresh 30-day Expires on every mint.
+	http.SetCookie(w, &http.Cookie{Name: "__Secure-next-auth.session-token", Value: RotatedCookie, Path: "/", HttpOnly: true, Secure: true, Expires: time.Now().Add(30 * 24 * time.Hour).Truncate(time.Second)})
 	// Not a real JWT: the CLI falls back to a four-minute cache when exp is unreadable.
 	writeJSON(w, 200, map[string]any{"token": "access-token", "idToken": "id", "expires": time.Now().Add(30 * 24 * time.Hour).Format(time.RFC3339), "user": map[string]any{}})
 }

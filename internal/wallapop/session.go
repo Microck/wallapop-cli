@@ -18,12 +18,15 @@ import (
 const SessionCookieName = "__Secure-next-auth.session-token"
 
 // Session mints five-minute access tokens from the web session cookie exactly
-// as the browser does (GET /api/auth/session). The cookie rotates on every
-// mint; OnRotate lets the caller persist the newest copy.
+// as the browser does (GET /api/auth/session). Every mint rotates the cookie
+// and re-issues it with a fresh 30-day expiry, so any authenticated call keeps
+// the Session alive. OnRotate lets the caller persist the newest copy and its
+// expiry; CookieExpires is zero until the first rotation is seen.
 type Session struct {
-	Cookie   string
-	DeviceID string
-	OnRotate func(newCookie string)
+	Cookie        string
+	CookieExpires time.Time
+	DeviceID      string
+	OnRotate      func(newCookie string, expires time.Time)
 
 	client *Client
 	mu     sync.Mutex
@@ -73,12 +76,17 @@ func (s *Session) mint(ctx context.Context) (string, time.Time, error) {
 		return "", time.Time{}, &Error{Kind: KindAuth, Status: resp.StatusCode, Endpoint: "GET /api/auth/session", Msg: "the stored session is no longer valid. Run `wallapop auth login` again"}
 	}
 	c.Redact(out.Token)
+	// Every re-issued cookie counts, even with an unchanged value: the expiry
+	// it carries is what slides the Session window.
 	for _, ck := range resp.Cookies() {
-		if ck.Name == SessionCookieName && ck.Value != "" && ck.Value != s.Cookie {
+		if ck.Name == SessionCookieName && ck.Value != "" {
+			if ck.Value != s.Cookie {
+				c.Redact(ck.Value)
+			}
 			s.Cookie = ck.Value
-			c.Redact(ck.Value)
+			s.CookieExpires = cookieExpiry(ck)
 			if s.OnRotate != nil {
-				s.OnRotate(ck.Value)
+				s.OnRotate(ck.Value, s.CookieExpires)
 			}
 		}
 	}
@@ -87,6 +95,15 @@ func (s *Session) mint(ctx context.Context) (string, time.Time, error) {
 		exp = time.Now().Add(4 * time.Minute)
 	}
 	return out.Token, exp, nil
+}
+
+// cookieExpiry follows RFC 6265: Max-Age wins over Expires when both are
+// present. Zero means the server sent a cookie with no lifetime.
+func cookieExpiry(ck *http.Cookie) time.Time {
+	if ck.MaxAge > 0 {
+		return time.Now().Add(time.Duration(ck.MaxAge) * time.Second)
+	}
+	return ck.Expires
 }
 
 // jwtExpiry reads exp from an unverified JWT. Verification is not needed: the

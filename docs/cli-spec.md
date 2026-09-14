@@ -49,7 +49,11 @@ completion <shell>
   Email+password login (`POST /api/v3/access/login`) is not implemented: the flow was not
   verified and cookie import covers every account. Implicitly creates the Profile; the
   first Profile becomes default.
-- `auth status` shows profile, account name, session expiry, where the session came from.
+- `auth status` shows profile, account name, the stored cookie's expiry, where the session
+  came from; `--check` mints once to prove the Session still works.
+- `auth refresh` mints once and prints the same status as `auth status`, now carrying the
+  rotated cookie's expiry. Exit 3 when the Session is rejected. For people who schedule with
+  cron instead of `watch service`; `watch check` already does this on its own.
 - `auth logout [--yes]` deletes the Profile's Session. Not a destructive Wallapop action, so no
   prompt; `--yes` exists for symmetry only.
 
@@ -59,6 +63,15 @@ The response rotates the session cookie via `Set-Cookie`; the CLI persists the n
 (old ones keep working, so a lost rotation is not fatal). Access tokens are cached in memory
 and re-minted 30 s before expiry. All `api.wallapop.com` calls send
 `Authorization: Bearer <token>` and `X-DeviceOS: 0`.
+
+Sliding window (verified 2026-09-14): every mint re-issues the cookie with a fresh 30-day
+`Expires`, so running any authenticated command at least once every 30 days keeps the Session
+alive indefinitely, and 30 days of silence ends it. Watches read public data and would never
+mint, so `watch check` and each `watch run` tick mint once when the Profile has a stored
+Session; a rejected Session there is a stderr warning, not a failure, because the Watches
+still ran. The stored expiry is `session_expires` in `credentials.toml`. A Session from
+`WALLAPOP_SESSION_TOKEN` is never persisted, so nothing slides it; re-export it before it
+expires.
 
 ### profile
 
@@ -146,7 +159,8 @@ Watches, Checks, Events and Sinks are defined in `CONTEXT.md`.
 - `watch list`, `watch remove NAME [--yes]`.
 - `watch check [NAME...] [--all]` runs one Check per named Watch (default: all due). Prints
   Events (JSON array, or one object per line with `--format jsonl`), delivers them to the
-  Watch's Sinks, updates state. Idempotent; exit 0 even when nothing changed.
+  Watch's Sinks, updates state. Idempotent; exit 0 even when nothing changed. Mints once when
+  the Profile has a stored Session so the scheduled timer keeps it alive (see auth).
 - `watch run [--interval DUR]` foreground loop: `check --all` every interval until Ctrl-C.
   Interval default 5m, floor 30s, plus up to 10% jitter.
 - `watch events [NAME] [--since DUR] [--limit N]` reads stored Event history.
