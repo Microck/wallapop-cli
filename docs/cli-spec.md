@@ -342,7 +342,7 @@ No mocks.
 ## 15. Layout
 
 ```
-main.go
+cmd/wallapop/main.go entrypoint; lives under cmd/ so `go install` names the binary wallapop
 internal/cli/        one file per noun (auth.go, search.go, item.go, chat.go, watch.go, ...)
 internal/wallapop/   API client: session.go, search.go, items.go, users.go, chat.go, pubnub.go
 internal/store/      sqlite schema, watches, events, seen-state

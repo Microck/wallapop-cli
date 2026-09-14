@@ -1,7 +1,7 @@
 .PHONY: build test check fmt vet lint install
 
 build:
-	go build -o bin/wallapop .
+	go build -o bin/wallapop ./cmd/wallapop
 
 test:
 	go test ./... -count=1
@@ -19,4 +19,4 @@ check: vet lint test
 	test -z "$$(gofmt -l .)"
 
 install:
-	go install -ldflags "-X main.version=$$(git describe --tags --always --dirty)" .
+	go install -ldflags "-X main.version=$$(git describe --tags --always --dirty)" ./cmd/wallapop

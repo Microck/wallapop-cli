@@ -14,7 +14,9 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "https://github.com/$repo/releases/download/$tag/$asset" -o "$tmp/$asset"
 curl -fsSL "https://github.com/$repo/releases/download/$tag/checksums.txt" -o "$tmp/checksums.txt"
-(cd "$tmp" && grep " $asset\$" checksums.txt | sha256sum -c - >/dev/null)
+# macOS ships shasum, most Linux distributions ship sha256sum.
+if command -v sha256sum >/dev/null 2>&1; then checksum_cmd="sha256sum"; else checksum_cmd="shasum -a 256"; fi
+(cd "$tmp" && grep " $asset\$" checksums.txt | $checksum_cmd -c - >/dev/null)
 tar -xzf "$tmp/$asset" -C "$tmp" wallapop
 mkdir -p "$dir"
 install -m 0755 "$tmp/wallapop" "$dir/wallapop"
