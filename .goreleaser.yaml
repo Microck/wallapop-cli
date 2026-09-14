@@ -8,7 +8,9 @@ before:
 
 builds:
   - id: wallapop
-    main: .
+    # cmd/wallapop rather than the module root so `go install .../cmd/wallapop`
+    # names the binary wallapop, not wallapop-cli.
+    main: ./cmd/wallapop
     binary: wallapop
     env:
       - CGO_ENABLED=0
@@ -51,15 +53,26 @@ homebrew_casks:
     repository:
       owner: Microck
       name: homebrew-tap
+      # The Actions GITHUB_TOKEN cannot write to another repo.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/Microck/wallapop-cli
     description: Terminal CLI for Wallapop
     license: MIT
+    # The binary is not notarized, so Gatekeeper would kill it on first run
+    # unless the quarantine flag Homebrew sets on the download is removed.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/wallapop"]
+          end
 
 scoops:
   - name: wallapop
     repository:
       owner: Microck
       name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
     homepage: https://github.com/Microck/wallapop-cli
     description: Terminal CLI for Wallapop
     license: MIT

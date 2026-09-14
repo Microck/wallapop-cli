@@ -26,12 +26,22 @@
 # linux / macos
 curl -fsSL https://raw.githubusercontent.com/Microck/wallapop-cli/main/scripts/install.sh | sh
 
-# go
-go install github.com/Microck/wallapop-cli@latest
-
-# homebrew / scoop (after the first release)
+# macos
 brew install Microck/tap/wallapop
-scoop bucket add microck https://github.com/Microck/scoop-bucket && scoop install wallapop
+
+# windows
+scoop bucket add microck https://github.com/Microck/scoop-bucket
+scoop install wallapop
+
+# anywhere with go
+go install github.com/Microck/wallapop-cli/cmd/wallapop@latest
+```
+
+every release ships `checksums.txt` with a github provenance attestation:
+
+```sh
+gh release download --repo Microck/wallapop-cli --pattern checksums.txt
+gh attestation verify checksums.txt --repo Microck/wallapop-cli
 ```
 
 ### auth
