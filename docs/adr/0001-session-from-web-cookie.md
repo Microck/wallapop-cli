@@ -45,10 +45,10 @@ mobile access/refresh token pair?
 
 Findings (probed live without an account, except the MFA bullet which follows from the
 OAuth architecture and the ADR context above):
-
 - `GET https://es.wallapop.com/api/auth/providers` lists exactly one NextAuth provider,
-  `keycloak` (OAuth). There is no credentials provider, so the session cookie is minted
-  only through the Keycloak browser-redirect dance — nothing a CLI POST can complete.
+  `keycloak` (OAuth): no credentials provider is advertised. The observed NextAuth session
+  path is the Keycloak browser redirect, and the separate password endpoint was not verified
+  to bridge into it.
 - `POST https://api.wallapop.com/api/v3/access/login` is served by a separate auth service
   (`x-wallapop-service: auth`). Probes without valid credentials return an empty 400, so the
   request schema is unknown, and neither the BFF route table nor unofficial-client auth flows
