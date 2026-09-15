@@ -166,8 +166,19 @@ Watches, Checks, Events and Sinks are defined in `CONTEXT.md`.
 - `watch events [NAME] [--since DUR] [--limit N]` reads stored Event history.
 - `watch service install [--interval DUR]` writes a systemd user service+timer (Linux) or
   a launchd agent (macOS) that runs `wallapop watch check --all --profile ...`. On Windows
-  it prints the `schtasks` command to run by hand. `uninstall` removes it, `status` shows the
-  unit state and last run. Logs go to journald / a file under the state dir.
+  it prints the `schtasks` command to run by hand in cmd.exe (whole minutes, rounded up).
+  Other platforms get a usage error. `uninstall` fails if the scheduler cannot be stopped. On
+  Linux, install also runs `loginctl enable-linger`, without which a user timer stops at
+  logout and does not start at boot. `status` says `not installed` when the unit files are
+  missing, otherwise what the scheduler reports: `active`/`inactive`/`failed` on systemd
+  (`unknown` if `systemctl --user` is unavailable), suffixed with a warning when the timer is
+  not enabled or linger is off; `loaded`/`not loaded` on launchd. systemd also gives the
+  last trigger time as `last_run`. `doctor` shows the same state. `uninstall` removes the
+  units and the log. Output is appended to `$XDG_STATE_HOME/wallapop-cli/wallapop-watch-
+  <profile>.log`; `watch check` renames it to `.log.1` once it passes 1 MiB, so the log is
+  bounded by two files of about that size. Verified on systemd 2026-09-15: the timer fires
+  on install and on the interval and Events land in the log. Reboot and launchd not yet
+  exercised.
 
 Event types: `item.new`, `item.price_changed`, `item.reserved`, `item.unreserved`,
 `item.sold`, `item.removed`, `item.edited`, `seller.new_item`. Event shape:

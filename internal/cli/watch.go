@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -398,6 +399,8 @@ func (a *App) watchCheckCmd() *cobra.Command {
 names, watches whose interval has elapsed run; --all forces every watch.
 Prints the events produced (none is fine: exit 0) and delivers them to sinks.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Rotate first so a run that fails below still cannot grow the log unbounded.
+			a.rotateServiceLog()
 			st, err := a.Store()
 			if err != nil {
 				return err
@@ -559,8 +562,8 @@ func (a *App) watchServiceCmd() *cobra.Command {
 	}
 	install.Flags().DurationVar(&interval, "interval", 0, "timer period (default from config, 5m)")
 	cmd.AddCommand(install,
-		&cobra.Command{Use: "uninstall", Short: "Remove the timer", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error { return a.serviceUninstall() }},
-		&cobra.Command{Use: "status", Short: "Show the timer's state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error { return a.serviceStatus() }},
+		&cobra.Command{Use: "uninstall", Short: "Remove the timer and its log", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error { return a.serviceUninstall() }},
+		&cobra.Command{Use: "status", Short: "Show the timer's state and last run", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error { return a.serviceStatus() }},
 	)
 	return cmd
 }
@@ -571,6 +574,8 @@ type serviceView struct {
 	Files    []string `json:"files,omitempty"`
 	Command  string   `json:"command,omitempty"`
 	State    string   `json:"state,omitempty"`
+	LastRun  string   `json:"last_run,omitempty"`
+	Log      string   `json:"log,omitempty"`
 	Hint     string   `json:"hint,omitempty"`
 }
 
@@ -585,6 +590,12 @@ func (v serviceView) Pretty(w io.Writer, color bool) {
 	if v.State != "" {
 		rows = append(rows, []string{"state", v.State})
 	}
+	if v.LastRun != "" {
+		rows = append(rows, []string{"last run", v.LastRun})
+	}
+	if v.Log != "" {
+		rows = append(rows, []string{"log", v.Log})
+	}
 	if v.Command != "" {
 		rows = append(rows, []string{"command", v.Command})
 	}
@@ -595,6 +606,109 @@ func (v serviceView) Pretty(w io.Writer, color bool) {
 }
 
 func (a *App) serviceUnitName() string { return "wallapop-watch-" + a.Profile }
+
+// serviceLogFile is where the scheduler appends this profile's check output.
+func (a *App) serviceLogFile() string {
+	return filepath.Join(a.Paths.StateDir, a.serviceUnitName()+".log")
+}
+
+// serviceUnit is this profile's scheduler integration on the current platform.
+// One GOOS switch decides platform, unit name and unit files; everything else
+// reads from here. Nil on platforms without integration (Windows gets a
+// printed command instead).
+type serviceUnit struct {
+	platform string   // systemd or launchd
+	name     string   // timer unit or launchd label
+	files    []string // written by install; any missing means not installed
+}
+
+func (a *App) serviceUnit() *serviceUnit {
+	n := a.serviceUnitName()
+	switch runtime.GOOS {
+	case "linux":
+		dir := filepath.Join(config.UserHome(), ".config", "systemd", "user")
+		return &serviceUnit{platform: "systemd", name: n + ".timer", files: []string{filepath.Join(dir, n+".service"), filepath.Join(dir, n+".timer")}}
+	case "darwin":
+		label := "dev.micr.wallapop-cli." + a.Profile
+		return &serviceUnit{platform: "launchd", name: label, files: []string{filepath.Join(config.UserHome(), "Library", "LaunchAgents", label+".plist")}}
+	}
+	return nil
+}
+
+func (u *serviceUnit) installed() bool {
+	for _, f := range u.files {
+		if _, err := os.Stat(f); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// state asks the scheduler. "not installed" when the unit files are missing.
+// On systemd an active timer that is not enabled dies at reboot, and a user
+// manager without linger dies at logout; both are appended so "active" is
+// never a false comfort. lastRun is systemd's last trigger time; launchd has
+// no cheap equivalent.
+func (u *serviceUnit) state() (state, lastRun string) {
+	if !u.installed() {
+		return "not installed", ""
+	}
+	if u.platform == "launchd" {
+		if err := exec.Command("launchctl", "list", u.name).Run(); err != nil {
+			return "not loaded", ""
+		}
+		return "loaded", ""
+	}
+	out, err := exec.Command("systemctl", "--user", "is-active", u.name).Output()
+	state = strings.TrimSpace(string(out))
+	if state == "" {
+		if err != nil {
+			return "unknown", ""
+		}
+		state = "inactive"
+	}
+	if enabled, _ := exec.Command("systemctl", "--user", "is-enabled", u.name).Output(); strings.TrimSpace(string(enabled)) != "enabled" {
+		state += " (not enabled: gone after reboot)"
+	}
+	if !lingerEnabled() {
+		state += " (linger off: stops at logout, run `loginctl enable-linger`)"
+	}
+	if last, err := exec.Command("systemctl", "--user", "show", "-p", "LastTriggerUSec", "--value", u.name).Output(); err == nil {
+		if v := strings.TrimSpace(string(last)); v != "" && v != "n/a" {
+			lastRun = v
+		}
+	}
+	return state, lastRun
+}
+
+// lingerEnabled reports whether the user manager survives logout, which a
+// user timer needs to run unattended and after a reboot.
+func lingerEnabled() bool {
+	out, err := exec.Command("loginctl", "show-user", "--value", "-p", "Linger", os.Getenv("USER")).Output()
+	return err == nil && strings.TrimSpace(string(out)) == "yes"
+}
+
+// serviceLogCap bounds the scheduler log: a month of five-minute checks that
+// print nothing is a few hundred KB, so 1 MiB means rotation only happens on
+// a busy or noisy watch.
+const serviceLogCap = 1 << 20
+
+// rotateServiceLog moves an oversized scheduler log to ".1" at the start of a
+// check. systemd and launchd hold the old file open in append mode, so the
+// current run keeps writing to the renamed file and the next run starts a
+// fresh one. Rotation happens here rather than in the unit files because the
+// two schedulers have no shared size-cap primitive and a shell wrapper in the
+// units would be harder to test. No log file means nothing to do.
+func (a *App) rotateServiceLog() {
+	log := a.serviceLogFile()
+	info, err := os.Stat(log)
+	if err != nil || info.Size() <= serviceLogCap {
+		return
+	}
+	if err := os.Rename(log, log+".1"); err != nil {
+		fmt.Fprintf(a.Stderr, "wallapop: could not rotate %s: %v\n", log, err)
+	}
+}
 
 func (a *App) serviceCommandLine() (string, []string, error) {
 	exe, err := os.Executable()
@@ -610,40 +724,49 @@ func (a *App) serviceInstall(iv time.Duration) error {
 	if err != nil {
 		return err
 	}
+	u := a.serviceUnit()
+	if u == nil {
+		// schtasks counts whole minutes and rejects 0, so intervals round up to at least 1.
+		cmdline := fmt.Sprintf(`schtasks /Create /SC MINUTE /MO %d /TN "%s" /TR "\"%s\" %s"`, max(1, int(math.Ceil(iv.Minutes()))), a.serviceUnitName(), exe, strings.Join(args, " "))
+		return a.printSchtasks(cmdline, "scheduled install is not automated on Windows; run the command above in cmd.exe")
+	}
 	if err := os.MkdirAll(a.Paths.StateDir, 0o700); err != nil {
 		return err
 	}
-	logFile := filepath.Join(a.Paths.StateDir, a.serviceUnitName()+".log")
-	switch runtime.GOOS {
-	case "linux":
-		dir := filepath.Join(config.UserHome(), ".config", "systemd", "user")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-		name := a.serviceUnitName()
+	if err := os.MkdirAll(filepath.Dir(u.files[0]), 0o755); err != nil {
+		return err
+	}
+	logFile := a.serviceLogFile()
+	view := serviceView{Platform: u.platform, Unit: u.name, Files: u.files, Log: logFile}
+	switch u.platform {
+	case "systemd":
+		// OnBootSec makes the first run happen shortly after boot (and right
+		// away on install, since boot is long past); OnUnitActiveSec keeps the
+		// cadence from each run's end. Persistent= is for OnCalendar timers only.
 		service := fmt.Sprintf("[Unit]\nDescription=wallapop-cli watch checks (%s)\n\n[Service]\nType=oneshot\nExecStart=%s %s\nStandardOutput=append:%s\nStandardError=append:%s\n",
 			a.Profile, exe, strings.Join(args, " "), logFile, logFile)
-		timer := fmt.Sprintf("[Unit]\nDescription=wallapop-cli watch timer (%s)\n\n[Timer]\nOnBootSec=2m\nOnUnitActiveSec=%s\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n", a.Profile, formatSystemd(iv))
-		sf, tf := filepath.Join(dir, name+".service"), filepath.Join(dir, name+".timer")
-		if err := os.WriteFile(sf, []byte(service), 0o644); err != nil {
+		timer := fmt.Sprintf("[Unit]\nDescription=wallapop-cli watch timer (%s)\n\n[Timer]\nOnBootSec=2m\nOnUnitActiveSec=%s\n\n[Install]\nWantedBy=timers.target\n", a.Profile, formatSystemd(iv))
+		if err := os.WriteFile(u.files[0], []byte(service), 0o644); err != nil {
 			return err
 		}
-		if err := os.WriteFile(tf, []byte(timer), 0o644); err != nil {
+		if err := os.WriteFile(u.files[1], []byte(timer), 0o644); err != nil {
 			return err
 		}
 		if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
 			return fmt.Errorf("systemctl daemon-reload: %v: %s", err, out)
 		}
-		if out, err := exec.Command("systemctl", "--user", "enable", "--now", name+".timer").CombinedOutput(); err != nil {
+		if out, err := exec.Command("systemctl", "--user", "enable", "--now", u.name).CombinedOutput(); err != nil {
 			return fmt.Errorf("systemctl enable: %v: %s", err, out)
 		}
-		return a.Printer.Print(serviceView{Platform: "systemd", Unit: name + ".timer", Files: []string{sf, tf}, State: "enabled", Hint: "logs: " + logFile})
-	case "darwin":
-		label := "dev.micr.wallapop-cli." + a.Profile
-		dir := filepath.Join(config.UserHome(), "Library", "LaunchAgents")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
+		// Without linger the user manager, and this timer with it, stops at
+		// logout and does not start at boot until the next login.
+		if !lingerEnabled() {
+			if out, err := exec.Command("loginctl", "enable-linger").CombinedOutput(); err != nil {
+				view.Hint = fmt.Sprintf("could not enable linger (%v: %s); run `loginctl enable-linger` so the timer survives logout and reboot", err, strings.TrimSpace(string(out)))
+			}
 		}
+		view.State = "enabled"
+	case "launchd":
 		var progArgs strings.Builder
 		for _, s := range append([]string{exe}, args...) {
 			progArgs.WriteString("    <string>" + s + "</string>\n")
@@ -659,20 +782,17 @@ func (a *App) serviceInstall(iv time.Duration) error {
   <key>StandardOutPath</key><string>%s</string>
   <key>StandardErrorPath</key><string>%s</string>
 </dict></plist>
-`, label, progArgs.String(), int(iv.Seconds()), logFile, logFile)
-		pf := filepath.Join(dir, label+".plist")
-		if err := os.WriteFile(pf, []byte(plist), 0o644); err != nil {
+`, u.name, progArgs.String(), int(iv.Seconds()), logFile, logFile)
+		if err := os.WriteFile(u.files[0], []byte(plist), 0o644); err != nil {
 			return err
 		}
-		_ = exec.Command("launchctl", "unload", pf).Run()
-		if out, err := exec.Command("launchctl", "load", pf).CombinedOutput(); err != nil {
+		_ = exec.Command("launchctl", "unload", u.files[0]).Run()
+		if out, err := exec.Command("launchctl", "load", u.files[0]).CombinedOutput(); err != nil {
 			return fmt.Errorf("launchctl load: %v: %s", err, out)
 		}
-		return a.Printer.Print(serviceView{Platform: "launchd", Unit: label, Files: []string{pf}, State: "loaded", Hint: "logs: " + logFile})
-	default:
-		cmdline := fmt.Sprintf(`schtasks /Create /SC MINUTE /MO %d /TN "%s" /TR "\"%s\" %s"`, int(iv.Minutes()), a.serviceUnitName(), exe, strings.Join(args, " "))
-		return a.Printer.Print(serviceView{Platform: runtime.GOOS, Command: cmdline, Hint: "scheduled install is not automated on this platform; run the command above yourself"})
+		view.State = "loaded"
 	}
+	return a.Printer.Print(view)
 }
 
 func formatSystemd(d time.Duration) string {
@@ -682,45 +802,57 @@ func formatSystemd(d time.Duration) string {
 	return strconv.Itoa(int(d.Seconds())) + "s"
 }
 
-func (a *App) serviceUninstall() error {
-	switch runtime.GOOS {
-	case "linux":
-		name := a.serviceUnitName()
-		_ = exec.Command("systemctl", "--user", "disable", "--now", name+".timer").Run()
-		dir := filepath.Join(config.UserHome(), ".config", "systemd", "user")
-		_ = os.Remove(filepath.Join(dir, name+".service"))
-		_ = os.Remove(filepath.Join(dir, name+".timer"))
-		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
-		return a.Printer.Print(serviceView{Platform: "systemd", Unit: name + ".timer", State: "removed"})
-	case "darwin":
-		label := "dev.micr.wallapop-cli." + a.Profile
-		pf := filepath.Join(config.UserHome(), "Library", "LaunchAgents", label+".plist")
-		_ = exec.Command("launchctl", "unload", pf).Run()
-		_ = os.Remove(pf)
-		return a.Printer.Print(serviceView{Platform: "launchd", Unit: label, State: "removed"})
+// printSchtasks is the Windows path: no integration, the user runs the printed
+// command. Other platforms without a scheduler are refused outright rather
+// than handed a cmd.exe command line.
+func (a *App) printSchtasks(cmdline, hint string) error {
+	if runtime.GOOS != "windows" {
+		return output.Usagef("watch service has no scheduler integration on %s; use cron with `wallapop watch check --all`", runtime.GOOS)
 	}
-	return a.Printer.Print(serviceView{Platform: runtime.GOOS, Command: fmt.Sprintf(`schtasks /Delete /TN "%s" /F`, a.serviceUnitName()), Hint: "run the command above yourself"})
+	return a.Printer.Print(serviceView{Platform: "schtasks", Command: cmdline, Hint: hint})
+}
+
+// serviceUninstall stops the timer, then removes the units and the scheduler
+// log, so nothing of the schedule outlives it. A scheduler that cannot be
+// stopped is an error, not a "removed": deleting the files under a still
+// loaded unit would leave it running blind. Watches and events stay in the
+// state database.
+func (a *App) serviceUninstall() error {
+	u := a.serviceUnit()
+	if u == nil {
+		return a.printSchtasks(fmt.Sprintf(`schtasks /Delete /TN "%s" /F`, a.serviceUnitName()), "run the command above in cmd.exe")
+	}
+	if u.installed() {
+		var stop *exec.Cmd
+		switch u.platform {
+		case "systemd":
+			stop = exec.Command("systemctl", "--user", "disable", "--now", u.name)
+		case "launchd":
+			stop = exec.Command("launchctl", "unload", u.files[0])
+		}
+		if out, err := stop.CombinedOutput(); err != nil {
+			return fmt.Errorf("%s: %v: %s", strings.Join(stop.Args, " "), err, strings.TrimSpace(string(out)))
+		}
+	}
+	for _, f := range u.files {
+		_ = os.Remove(f)
+	}
+	if u.platform == "systemd" {
+		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	}
+	log := a.serviceLogFile()
+	_ = os.Remove(log)
+	_ = os.Remove(log + ".1")
+	return a.Printer.Print(serviceView{Platform: u.platform, Unit: u.name, State: "removed"})
 }
 
 func (a *App) serviceStatus() error {
-	switch runtime.GOOS {
-	case "linux":
-		name := a.serviceUnitName()
-		out, _ := exec.Command("systemctl", "--user", "is-active", name+".timer").Output()
-		state := strings.TrimSpace(string(out))
-		if state == "" {
-			state = "not installed"
-		}
-		return a.Printer.Print(serviceView{Platform: "systemd", Unit: name + ".timer", State: state})
-	case "darwin":
-		label := "dev.micr.wallapop-cli." + a.Profile
-		state := "not loaded"
-		if err := exec.Command("launchctl", "list", label).Run(); err == nil {
-			state = "loaded"
-		}
-		return a.Printer.Print(serviceView{Platform: "launchd", Unit: label, State: state})
+	u := a.serviceUnit()
+	if u == nil {
+		return a.printSchtasks(fmt.Sprintf(`schtasks /Query /TN "%s"`, a.serviceUnitName()), "")
 	}
-	return a.Printer.Print(serviceView{Platform: runtime.GOOS, Command: fmt.Sprintf(`schtasks /Query /TN "%s"`, a.serviceUnitName())})
+	state, lastRun := u.state()
+	return a.Printer.Print(serviceView{Platform: u.platform, Unit: u.name, State: state, LastRun: lastRun, Log: a.serviceLogFile()})
 }
 
 // sink commands
