@@ -128,12 +128,21 @@ detail with the page flags.
 - `item open ITEM` opens the web page in the browser.
 - `item favorite ITEM` / `item unfavorite ITEM` via `PUT /api/v3/items/{hash}/favorite`.
 - `item reserve ITEM [--off]`, `item sold ITEM [--yes]`, `item delete ITEM [--yes]` act on the
-  account's own Items. `sold` and `delete` prompt in a TTY and require `--yes` otherwise.
+  account's own Items: `PUT /api/v3/items/{hash}/reserve {reserved}`, `PUT .../sold`,
+  `DELETE /api/v3/items/{hash}`, all 204 with `Authorization` and `X-DeviceOS: 0` alone.
+  `sold` and `delete` prompt in a TTY and require `--yes` otherwise. The CLI fetches the Item
+  first and refuses one listed by another account (usage error, exit 2) because Wallapop
+  answers such writes with a bare 401 (reserve, delete) or 403 (sold); should such a status
+  still come back (ownership changed between check and write), the API package reports it
+  as a refused write, exit 1, not as a dead session. Verified live
+  2026-09-15 on a throwaway listing: reserve, unreserve, sold (moves to `me items --sold`)
+  and delete (page and API 404 afterwards), each reflected on the web.
 
 ### user / me
 
 - `user show USER`, `user items USER`, `user reviews USER` (public endpoints; USER is id or slug).
-- `me show`, `me items [--sold]`, `me favorites` (authenticated).
+- `me show`, `me items [--sold]`, `me favorites` (authenticated). `GET /api/v3/user/items[/sold]`
+  carries no location, so `me items` shows an empty city (observed 2026-09-15).
 
 ### chat
 

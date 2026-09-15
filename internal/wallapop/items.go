@@ -3,6 +3,7 @@ package wallapop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -278,19 +279,36 @@ func (c *Client) SetFavorite(ctx context.Context, hash string, on bool) error {
 // SetReserved toggles the reserved flag on one of the account's own items.
 func (c *Client) SetReserved(ctx context.Context, hash string, on bool) error {
 	_, err := c.do(ctx, request{method: http.MethodPut, base: c.APIBase, path: "/api/v3/items/" + hash + "/reserve", body: map[string]bool{"reserved": on}, auth: true}, nil)
+	return ownWriteError(err)
+}
+
+// ownWriteError names what a bare 401/403 on an item write means. Wallapop
+// answers writes on someone else's item that way, with no body (verified
+// 2026-09-15: 401 for reserve and delete, 403 for sold), which the generic
+// mapping would report as a dead session or a rate limit. Callers check
+// ownership before writing; this covers the race when they lose it. A 401 or
+// 403 that carries a body (Wallapop's auth envelope, CloudFront's HTML) keeps
+// its generic classification.
+func ownWriteError(err error) error {
+	var e *Error
+	if errors.As(err, &e) && e.Body == "" && (e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden) {
+		e.Kind = KindGeneric
+		e.Retryable = false
+		e.Msg = "wallapop refused the write: the item is not listed by this account, or the session lapsed. Check `wallapop item show` and `wallapop auth status --check`"
+	}
 	return err
 }
 
 // MarkSold marks one of the account's own items as sold. Irreversible on Wallapop.
 func (c *Client) MarkSold(ctx context.Context, hash string) error {
 	_, err := c.do(ctx, request{method: http.MethodPut, base: c.APIBase, path: "/api/v3/items/" + hash + "/sold", auth: true}, nil)
-	return err
+	return ownWriteError(err)
 }
 
 // DeleteItem removes one of the account's own items. Irreversible on Wallapop.
 func (c *Client) DeleteItem(ctx context.Context, hash string) error {
 	_, err := c.do(ctx, request{method: http.MethodDelete, base: c.APIBase, path: "/api/v3/items/" + hash, auth: true}, nil)
-	return err
+	return ownWriteError(err)
 }
 
 type userItemsResponse struct {
