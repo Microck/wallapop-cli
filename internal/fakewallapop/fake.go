@@ -7,9 +7,11 @@ package fakewallapop
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,15 +28,18 @@ const (
 
 // Item is the fake's canonical listing; every endpoint renders from it.
 type Item struct {
-	Hash     string
-	Slug     string
-	Title    string
-	Price    float64
-	Seller   string
-	Reserved bool
-	Sold     bool
-	Removed  bool // page 404s, API detail 404s
-	Modified time.Time
+	Hash        string
+	Slug        string
+	Title       string
+	Description string
+	Price       float64
+	Condition   string
+	Images      int
+	Seller      string
+	Reserved    bool
+	Sold        bool
+	Removed     bool // page 404s, API detail 404s
+	Modified    time.Time
 }
 
 type Conversation struct {
@@ -88,7 +93,8 @@ type Server struct {
 	MintEmpty     bool // /api/auth/session answers {} (invalid session)
 	MalformedItem bool // /api/v3/items/{hash} answers non-JSON
 	CreateCalls   int
-	WebhookStatus int // status for POST /hook (0 = 200)
+	Uploads       map[string]int // pictures received per upload id
+	WebhookStatus int            // status for POST /hook (0 = 200)
 	Hooks         []json.RawMessage
 }
 
@@ -193,10 +199,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(p, "/api/v3/searchalerts/savedsearch/"):
 		s.savedSearches(w, r)
 	case p == "/api/v3/categories":
-		writeJSON(w, 200, map[string]any{"categories": []map[string]any{
-			{"id": 100, "name": "Cars", "vertical_id": "cars", "subcategories": []any{}},
-			{"id": 17000, "name": "Bikes", "vertical_id": "consumer_goods", "subcategories": []map[string]any{{"id": 17001, "name": "MTB", "subcategories": []any{}}}},
-		}})
+		s.categories(w, r)
 	case p == "/api/v3/users/me":
 		if !s.authed(w, r) {
 			return
@@ -221,6 +224,25 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			data = []map[string]any{}
 		}
 		writeJSON(w, 200, map[string]any{"data": data, "meta": map[string]any{}})
+	case p == "/api/v3/items" && r.Method == http.MethodPost:
+		s.createItem(w, r)
+	case p == "/api/v3/items/upload/components":
+		if !s.authed(w, r) {
+			return
+		}
+		writeJSON(w, 200, map[string]any{"components": []any{}})
+	case strings.HasPrefix(p, "/api/v3/upload/") && strings.HasSuffix(p, "/pictures"):
+		if !s.authed(w, r) {
+			return
+		}
+		id := strings.TrimSuffix(strings.TrimPrefix(p, "/api/v3/upload/"), "/pictures")
+		s.mu.Lock()
+		if s.Uploads == nil {
+			s.Uploads = map[string]int{}
+		}
+		s.Uploads[id]++
+		s.mu.Unlock()
+		w.WriteHeader(204)
 	case strings.HasPrefix(p, "/api/v3/items/"):
 		s.items(w, r)
 	case strings.HasPrefix(p, "/item/"):
@@ -486,7 +508,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 			"price":           map[string]any{"cash": map[string]any{"amount": it.Price, "currency": "EUR"}},
 			"images":          []map[string]any{{"id": "img1", "urls": map[string]string{"big": "https://cdn/" + it.Hash + ".jpg"}}},
 			"location":        map[string]any{"latitude": 40.4, "longitude": -3.7, "city": "Madrid", "postal_code": "28001", "country_code": "ES"},
-			"type_attributes": map[string]any{"condition": map[string]any{"value": "good"}},
+			"type_attributes": map[string]any{"condition": map[string]any{"value": s.itemCondition(it)}},
 			"shipping":        map[string]bool{"item_is_shippable": true},
 			"favorited":       map[string]bool{"flag": s.Favorites[it.Hash]},
 			"counters":        map[string]int{"views": 12, "favorites": 3, "conversations": 1},
@@ -528,6 +550,8 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		it.Sold = true
 		s.mu.Unlock()
 		w.WriteHeader(204)
+	case action == "" && r.Method == http.MethodPut:
+		s.editItem(w, r, it)
 	default:
 		writeJSON(w, 404, map[string]any{"code": 404, "message": "not found"})
 	}
@@ -556,7 +580,7 @@ func (s *Server) itemPage(w http.ResponseWriter, r *http.Request) {
 		"images":     []map[string]any{{"id": "img1", "urls": map[string]string{"big": "https://cdn/" + it.Hash + ".jpg"}}},
 		"location":   map[string]any{"latitude": 40.4, "longitude": -3.7, "city": "Madrid", "postalCode": "28001", "countryCode": "ES"},
 		"shipping":   map[string]bool{"isItemShippable": true},
-		"condition":  map[string]any{"value": "good", "text": "Buen estado"},
+		"condition":  map[string]any{"value": s.itemCondition(it), "text": "Buen estado"},
 		"taxonomies": []map[string]any{{"id": "17000", "name": "Bikes"}, {"id": "17001", "name": "MTB"}},
 	}
 	nd, _ := json.Marshal(map[string]any{"props": map[string]any{"pageProps": map[string]any{"item": item}}})
@@ -740,4 +764,136 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 		status = 200
 	}
 	w.WriteHeader(status)
+}
+
+// categories serves the taxonomy; in create context leaves carry the
+// attribute lists the upload flow validates against.
+func (s *Server) categories(w http.ResponseWriter, r *http.Request) {
+	attrs := map[string]any{}
+	if r.URL.Query().Get("context") == "create" {
+		attrs = map[string]any{"condition": map[string]any{"title": "condition"}, "size": map[string]any{"title": "size"}}
+	}
+	writeJSON(w, 200, map[string]any{"categories": []map[string]any{
+		{"id": 100, "name": "Cars", "vertical_id": "cars", "attributes": map[string]any{"brand": map[string]any{"title": "brand"}}, "subcategories": []any{}},
+		{"id": 17000, "name": "Bikes", "vertical_id": "consumer_goods", "subcategories": []map[string]any{{"id": 17001, "name": "MTB", "attributes": attrs, "subcategories": []any{}}}},
+	}})
+}
+
+func (s *Server) itemCondition(it *Item) string {
+	if it.Condition != "" {
+		return it.Condition
+	}
+	return "good"
+}
+
+// createItem mirrors POST /api/v3/items: multipart with image parts and an
+// `item` JSON part. Missing title or images is a 400; success answers 200
+// {"id"} and the listing appears in me items.
+func (s *Server) createItem(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(w, r) {
+		return
+	}
+	if r.Header.Get("Accept") != "application/vnd.upload-v2+json" {
+		writeJSON(w, 405, map[string]any{"code": 405, "type": 1})
+		return
+	}
+	mr, err := r.MultipartReader()
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"code": 400, "message": "not multipart"})
+		return
+	}
+	var itemJSON []byte
+	images := 0
+	for {
+		part, err := mr.NextPart()
+		if err != nil {
+			break
+		}
+		name := part.FormName()
+		body, _ := io.ReadAll(part)
+		if name == "item" {
+			itemJSON = body
+		} else if name == "image" {
+			images++
+		}
+	}
+	var in struct {
+		Attributes     map[string]any `json:"attributes"`
+		CategoryLeafID string         `json:"category_leaf_id"`
+	}
+	_ = json.Unmarshal(itemJSON, &in)
+	title, _ := in.Attributes["title"].(string)
+	if title == "" || images == 0 {
+		writeJSON(w, 400, map[string]any{"code": 400, "message": "title and images required"})
+		return
+	}
+	price, _ := in.Attributes["price_amount"].(float64)
+	cond, _ := in.Attributes["condition"].(string)
+	desc, _ := in.Attributes["description"].(string)
+	s.mu.Lock()
+	s.CreateCalls++
+	hash := "c" + strings.Repeat("0", 11-len(strconv.Itoa(s.CreateCalls))) + strconv.Itoa(s.CreateCalls)
+	it := &Item{Hash: hash, Title: title, Description: desc, Price: price, Condition: cond, Images: images, Seller: UserHash, Modified: time.Now()}
+	if it.Slug == "" {
+		it.Slug = strings.ToLower(strings.ReplaceAll(title, " ", "-")) + "-1301645280"
+	}
+	s.Items[hash] = it
+	s.SearchOrder = append(s.SearchOrder, hash)
+	s.mu.Unlock()
+	writeJSON(w, 200, map[string]any{"id": hash, "flags": map[string]any{}})
+}
+
+// editItem mirrors PUT /api/v3/items/{hash}: multipart like create, or plain
+// JSON when pictures are unchanged. Only the owner's items are writable.
+func (s *Server) editItem(w http.ResponseWriter, r *http.Request, it *Item) {
+	if !s.authed(w, r) || !s.owned(w, it, 401) {
+		return
+	}
+	var attrs map[string]any
+	images := -1
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+		mr, err := r.MultipartReader()
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"code": 400, "message": "not multipart"})
+			return
+		}
+		images = 0
+		for {
+			part, err := mr.NextPart()
+			if err != nil {
+				break
+			}
+			body, _ := io.ReadAll(part)
+			if part.FormName() == "item" {
+				_ = json.Unmarshal(body, &attrs)
+			} else if part.FormName() == "image" {
+				images++
+			}
+		}
+	} else {
+		_ = json.NewDecoder(r.Body).Decode(&attrs)
+	}
+	flat := attrs
+	if inner, ok := attrs["attributes"].(map[string]any); ok {
+		flat = inner
+	}
+	s.mu.Lock()
+	if v, ok := flat["title"].(string); ok && v != "" {
+		it.Title = v
+	}
+	if v, ok := flat["description"].(string); ok && v != "" {
+		it.Description = v
+	}
+	if v, ok := flat["price_amount"].(float64); ok {
+		it.Price = v
+	}
+	if v, ok := flat["condition"].(string); ok && v != "" {
+		it.Condition = v
+	}
+	if images >= 0 {
+		it.Images = images
+	}
+	it.Modified = time.Now()
+	s.mu.Unlock()
+	writeJSON(w, 200, map[string]any{})
 }

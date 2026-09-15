@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -955,5 +957,137 @@ func TestSellerActionsOnAnotherSellersItemFailBeforeWriting(t *testing.T) {
 		if rq.Method != "GET" {
 			t.Fatalf("no write may reach wallapop for someone else's item, saw %s %s", rq.Method, rq.Path)
 		}
+	}
+}
+
+func testPNG(t *testing.T, path string) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestItemCreatePublishesWithImages(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	img1 := filepath.Join(h.home, "a.png")
+	img2 := filepath.Join(h.home, "b.png")
+	testPNG(t, img1)
+	testPNG(t, img2)
+	r := h.must("", "item", "create",
+		"--title", "Test Bike", "--description", "A test bike", "--price", "120",
+		"--category", "17001", "--condition", "good",
+		"--image", img1, "--image", img2)
+	var created struct {
+		Hash string
+		URL  string
+	}
+	decode(t, r.stdout, &created)
+	if len(created.Hash) != 12 || created.URL == "" {
+		t.Fatalf("bad created item: %s", r.stdout)
+	}
+	if got := h.fake.CreateCalls; got != 1 {
+		t.Fatalf("CreateCalls = %d, want 1", got)
+	}
+	total := 0
+	for _, n := range h.fake.Uploads {
+		total += n
+	}
+	if total != 2 {
+		t.Fatalf("uploaded pictures = %d, want 2", total)
+	}
+	listed := h.must("", "me", "items")
+	if !strings.Contains(listed.stdout, created.Hash) {
+		t.Fatalf("created item missing from me items:\n%s", listed.stdout)
+	}
+	shown := h.must("", "item", "show", created.Hash)
+	var detail struct {
+		Title     string
+		Price     float64
+		Condition string
+	}
+	decode(t, shown.stdout, &detail)
+	if detail.Title != "Test Bike" || detail.Price != 120 || detail.Condition != "good" {
+		t.Fatalf("wrong detail: %s", shown.stdout)
+	}
+}
+
+func TestItemCreateMissingFieldsIsUsageError(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	r := h.run("", "item", "create", "--title", "Half")
+	if r.code != 2 {
+		t.Fatalf("exit %d, want 2: %s", r.code, r.stderr)
+	}
+	for _, want := range []string{"--description", "--price", "--category", "--condition", "--image"} {
+		if !strings.Contains(r.stderr, want) {
+			t.Fatalf("stderr missing %s: %s", want, r.stderr)
+		}
+	}
+	if h.fake.CreateCalls != 0 {
+		t.Fatal("create reached Wallapop despite missing fields")
+	}
+}
+
+func TestItemCreateRejectsUnknownAttr(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	img := filepath.Join(h.home, "a.png")
+	testPNG(t, img)
+	r := h.run("", "item", "create",
+		"--title", "T", "--description", "D", "--price", "5",
+		"--category", "17001", "--condition", "good",
+		"--attr", "wingspan=2", "--image", img)
+	if r.code != 2 || !strings.Contains(r.stderr, "wingspan") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	if h.fake.CreateCalls != 0 {
+		t.Fatal("create reached Wallapop despite bad attr")
+	}
+}
+
+func TestItemEditChangesFields(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(fakewallapop.Item{Hash: "hasheeeddddd", Title: "Old", Price: 10, Seller: fakewallapop.UserHash})
+	r := h.must("", "item", "edit", it.Hash, "--title", "New", "--price", "50", "--condition", "new")
+	var edited struct {
+		Title     string
+		Price     float64
+		Condition string
+	}
+	decode(t, r.stdout, &edited)
+	if edited.Title != "New" || edited.Price != 50 || edited.Condition != "new" {
+		t.Fatalf("wrong edit result: %s", r.stdout)
+	}
+}
+
+func TestItemEditForeignIsRefused(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(bike("hasheeeeeeff", 20))
+	r := h.run("", "item", "edit", it.Hash, "--title", "Mine now")
+	if r.code != 2 {
+		t.Fatalf("exit %d, want 2: %s", r.code, r.stderr)
+	}
+	for _, rq := range h.fake.RequestsUnder("/api/v3/items/" + it.Hash) {
+		if rq.Method == "PUT" {
+			t.Fatal("PUT sent for another seller's item")
+		}
+	}
+}
+
+func TestItemEditNoChangesIsUsageError(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(fakewallapop.Item{Hash: "hasheeeddaaa", Title: "Mine", Price: 5, Seller: fakewallapop.UserHash})
+	r := h.run("", "item", "edit", it.Hash)
+	if r.code != 2 {
+		t.Fatalf("exit %d, want 2: %s", r.code, r.stderr)
 	}
 }

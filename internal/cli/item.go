@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -101,6 +105,8 @@ es.wallapop.com/item/... URL.`,
 			func(ctx context.Context, hash string) error { return a.Client.MarkSold(ctx, hash) }),
 		a.destructiveItemCmd("delete", "deleted", "Delete one of your own listings", "Delete %s from Wallapop? This cannot be undone.",
 			func(ctx context.Context, hash string) error { return a.Client.DeleteItem(ctx, hash) }),
+		a.itemCreateCmd(),
+		a.itemEditCmd(),
 	)
 	return cmd
 }
@@ -202,6 +208,225 @@ func (a *App) destructiveItemCmd(name, done, short, prompt string, run func(cont
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "do not prompt")
 	return cmd
+}
+
+// itemCreateCmd publishes a new listing from the terminal. Required fields
+// missing on the command line are a usage error (exit 2), never a partial
+// publish: the server rejects imageless creates, so --image is required too.
+func (a *App) itemCreateCmd() *cobra.Command {
+	var title, description, category, condition string
+	var price, lat, lng float64
+	var images []string
+	var attrs []string
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Publish a new listing with one or more images",
+		Long: `Publish a new listing as the active profile.
+
+Category accepts a leaf id or name (the upload flow only takes leaves).
+Attributes specific to the category go through --attr key=value and are
+validated against what Wallapop lists for it; unknown keys fail before
+anything is published. Location defaults to the profile's.
+
+Examples:
+  wallapop item create --title "MTB" --description "Barely used" --price 120 --category MTB --condition good --image bike1.jpg --image bike2.jpg
+  wallapop item create --title "Golf" --price 8000 --category Cars --condition good --attr brand=Volkswagen --attr year=2019 --image car.jpg`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.requireSession(); err != nil {
+				return err
+			}
+			var missing []string
+			if title == "" {
+				missing = append(missing, "--title")
+			}
+			if description == "" {
+				missing = append(missing, "--description")
+			}
+			if !cmd.Flags().Changed("price") {
+				missing = append(missing, "--price")
+			}
+			if category == "" {
+				missing = append(missing, "--category")
+			}
+			if condition == "" {
+				missing = append(missing, "--condition")
+			}
+			if len(images) == 0 {
+				missing = append(missing, "--image FILE")
+			}
+			if len(missing) > 0 {
+				return output.Usagef("missing required %s", strings.Join(missing, ", "))
+			}
+			loc, err := a.location(lat, lng, 0)
+			if err != nil {
+				return err
+			}
+			cats, err := a.Client.CreateCategories(cmd.Context())
+			if err != nil {
+				return err
+			}
+			cat, err := wallapop.ResolveCreateCategory(cats, category)
+			if err != nil {
+				return err
+			}
+			parsed, err := parseItemAttrs(attrs, cat)
+			if err != nil {
+				return err
+			}
+			files, err := loadItemImages(images)
+			if err != nil {
+				return err
+			}
+			it, err := a.Client.CreateItem(cmd.Context(), wallapop.CreateInput{
+				Title: title, Description: description, Price: price,
+				CategoryLeaf: cat.LeafID, CategoryRoot: cat.RootID, Condition: condition,
+				Lat: loc.Lat, Lng: loc.Lng, Attrs: parsed, Images: files,
+			})
+			if err != nil {
+				return err
+			}
+			return a.Printer.Print(itemView(it))
+		},
+	}
+	cmd.Flags().StringVar(&title, "title", "", "listing title")
+	cmd.Flags().StringVar(&description, "description", "", "listing description")
+	cmd.Flags().Float64Var(&price, "price", 0, "price in euros")
+	cmd.Flags().StringVar(&category, "category", "", "leaf category id or name")
+	cmd.Flags().StringVar(&condition, "condition", "", "item condition")
+	cmd.Flags().Float64Var(&lat, "lat", 0, "listing latitude (default: profile location)")
+	cmd.Flags().Float64Var(&lng, "lng", 0, "listing longitude (default: profile location)")
+	cmd.Flags().StringArrayVar(&images, "image", nil, "image file to upload (repeatable, at least one)")
+	cmd.Flags().StringArrayVar(&attrs, "attr", nil, "category attribute key=value (repeatable)")
+	return cmd
+}
+
+// itemEditCmd changes fields on one of the account's own listings. Only the
+// flags passed change; everything else stays as it was. With no change flags
+// it reports usage instead of writing.
+func (a *App) itemEditCmd() *cobra.Command {
+	var title, description, condition string
+	var price float64
+	var images []string
+	var attrs []string
+	cmd := &cobra.Command{
+		Use:   "edit ITEM",
+		Short: "Change title, description, price, condition or images on your listing",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.requireSession(); err != nil {
+				return err
+			}
+			fl := cmd.Flags()
+			if !fl.Changed("title") && !fl.Changed("description") && !fl.Changed("price") && !fl.Changed("condition") && len(attrs) == 0 && len(images) == 0 {
+				return output.Usagef("nothing to change. Pass at least one of --title, --description, --price, --condition, --attr, --image")
+			}
+			hash, err := a.ownedItemHash(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			in := wallapop.EditInput{Attrs: map[string]string{}}
+			if fl.Changed("title") {
+				in.Title = &title
+			}
+			if fl.Changed("description") {
+				in.Description = &description
+			}
+			if fl.Changed("price") {
+				in.Price = &price
+			}
+			if fl.Changed("condition") {
+				in.Condition = &condition
+			}
+			if len(attrs) > 0 {
+				it, err := a.Client.Item(cmd.Context(), hash)
+				if err != nil {
+					return err
+				}
+				cats, err := a.Client.CreateCategories(cmd.Context())
+				if err != nil {
+					return err
+				}
+				cat, err := wallapop.ResolveCreateCategory(cats, it.Category)
+				if err != nil && it.CategoryID != 0 {
+					// Fall back to the numeric id when the name no longer resolves.
+					cat, err = wallapop.ResolveCreateCategory(cats, strconv.Itoa(it.CategoryID))
+				}
+				if err != nil {
+					return err
+				}
+				parsed, err := parseItemAttrs(attrs, cat)
+				if err != nil {
+					return err
+				}
+				in.Attrs = parsed
+			}
+			if len(images) > 0 {
+				files, err := loadItemImages(images)
+				if err != nil {
+					return err
+				}
+				in.Images = files
+			}
+			me, err := a.userHash(cmd.Context())
+			if err != nil {
+				return err
+			}
+			it, err := a.Client.EditItem(cmd.Context(), hash, me, in)
+			if err != nil {
+				return err
+			}
+			return a.Printer.Print(itemView(it))
+		},
+	}
+	cmd.Flags().StringVar(&title, "title", "", "new title")
+	cmd.Flags().StringVar(&description, "description", "", "new description")
+	cmd.Flags().Float64Var(&price, "price", 0, "new price in euros")
+	cmd.Flags().StringVar(&condition, "condition", "", "new condition")
+	cmd.Flags().StringArrayVar(&images, "image", nil, "replacement image files (repeatable)")
+	cmd.Flags().StringArrayVar(&attrs, "attr", nil, "category attribute key=value (repeatable)")
+	return cmd
+}
+
+// parseItemAttrs turns --attr key=value pairs into a map, rejecting unknown
+// keys against the category's attribute list before anything is published.
+func parseItemAttrs(pairs []string, cat wallapop.CreateCategory) (map[string]string, error) {
+	out := map[string]string{}
+	allowed := map[string]bool{"title": true, "description": true, "condition": true, "price_amount": true}
+	for _, a := range cat.Attrs {
+		allowed[strings.ToLower(a)] = true
+	}
+	for _, p := range pairs {
+		k, v, ok := strings.Cut(p, "=")
+		if !ok || k == "" {
+			return nil, output.Usagef("bad --attr %q. Use key=value", p)
+		}
+		if !allowed[strings.ToLower(k)] {
+			return nil, output.Usagef("unknown attribute %q for category %s. Valid: %s", k, cat.Name, strings.Join(cat.Attrs, ", "))
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
+// loadItemImages reads image files, refusing non-images before any upload.
+func loadItemImages(paths []string) ([]wallapop.UploadImage, error) {
+	var out []wallapop.UploadImage
+	for _, p := range paths {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) == 0 {
+			return nil, output.Usagef("image %s is empty", p)
+		}
+		ct := http.DetectContentType(raw[:min(512, len(raw))])
+		if !strings.HasPrefix(ct, "image/") {
+			return nil, output.Usagef("image %s is not an image (%s)", p, ct)
+		}
+		out = append(out, wallapop.UploadImage{Name: filepath.Base(p), Data: raw, ContentType: ct})
+	}
+	return out, nil
 }
 
 func openBrowser(url string) error {
