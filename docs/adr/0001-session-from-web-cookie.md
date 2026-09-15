@@ -32,8 +32,9 @@ only `auth login` path (see addendum: the `--password` idea from issue #7 did no
 
 - Login needs a cookie export from a logged-in browser (an extension such as Cookie-Editor, or
   devtools), because the cookie is HttpOnly and cannot be copied from `document.cookie`.
-- The CLI depends on the web app's NextAuth route staying put. A change there breaks every
-  authenticated command at once, which is visible and reported as exit 7 with an issue link.
+- The CLI depends on the web app's NextAuth route staying put. An unexpected shape or status
+  there surfaces as exit 7 with an issue link; a rejected or expired Session on the unchanged
+  route stays exit 3.
 - Sessions expire after 30 days of the cookie's lifetime; the CLI re-persists the rotated cookie
   after each mint so an actively used Profile keeps sliding forward.
 - No password ever touches the CLI's storage.
