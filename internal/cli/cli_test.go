@@ -335,7 +335,9 @@ func TestDestructiveItemActionsNeedYesWhenNotInteractive(t *testing.T) {
 		}
 	}
 	h.must("", "item", "sold", it.Hash, "--yes")
-	h.must("", "item", "delete", it.Hash, "--yes")
+	if r := h.must("", "item", "delete", it.Hash, "--yes"); !strings.Contains(r.stdout, `"action": "deleted"`) {
+		t.Fatalf("delete should report past tense like the other actions: %s", r.stdout)
+	}
 	if r := h.run("", "item", "show", it.Hash); r.code != 4 {
 		t.Fatalf("deleted item should be gone, exit %d", r.code)
 	}
@@ -936,5 +938,22 @@ func TestAlertListAndWatchFromAlertReuseTheSavedQuery(t *testing.T) {
 	}
 	if r := h.run("", "watch", "add", "search", "--from-alert=", "--name", "empty"); r.code != 2 {
 		t.Fatalf("an empty --from-alert must not fall through to a keyword-less watch, got %d", r.code)
+	}
+}
+
+func TestSellerActionsOnAnotherSellersItemFailBeforeWriting(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	theirs := h.fake.AddItem(fakewallapop.Item{Hash: "hashtheirs00", Title: "Theirs", Price: 5, Seller: fakewallapop.OtherHash})
+	for _, args := range [][]string{{"item", "sold", theirs.Hash, "--yes"}, {"item", "delete", theirs.Hash, "--yes"}, {"item", "reserve", theirs.Hash}} {
+		r := h.run("", args...)
+		if r.code != 2 || !strings.Contains(r.stderr, "another seller") {
+			t.Fatalf("%v: exit %d stderr %q", args, r.code, r.stderr)
+		}
+	}
+	for _, rq := range h.fake.RequestsUnder("/api/v3/items/" + theirs.Hash) {
+		if rq.Method != "GET" {
+			t.Fatalf("no write may reach wallapop for someone else's item, saw %s %s", rq.Method, rq.Path)
+		}
 	}
 }

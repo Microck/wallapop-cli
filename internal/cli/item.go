@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os/exec"
@@ -95,8 +96,11 @@ es.wallapop.com/item/... URL.`,
 		a.favoriteCmd("favorite", "Add the listing to your favorites", true),
 		a.favoriteCmd("unfavorite", "Remove the listing from your favorites", false),
 		a.reserveCmd(),
-		a.destructiveItemCmd("sold", "Mark one of your own listings as sold", "Mark %s as sold? This cannot be undone on Wallapop.", a.markSold),
-		a.destructiveItemCmd("delete", "Delete one of your own listings", "Delete %s from Wallapop? This cannot be undone.", a.deleteItem),
+		a.destructiveItemCmd("sold", "sold", "Mark one of your own listings as sold", "Mark %s as sold? This cannot be undone on Wallapop.",
+			// Closures, not method values: a.Client is built in setup, after this runs.
+			func(ctx context.Context, hash string) error { return a.Client.MarkSold(ctx, hash) }),
+		a.destructiveItemCmd("delete", "deleted", "Delete one of your own listings", "Delete %s from Wallapop? This cannot be undone.",
+			func(ctx context.Context, hash string) error { return a.Client.DeleteItem(ctx, hash) }),
 	)
 	return cmd
 }
@@ -136,7 +140,7 @@ func (a *App) reserveCmd() *cobra.Command {
 			if err := a.requireSession(); err != nil {
 				return err
 			}
-			hash, err := a.Client.ResolveItemHash(cmd.Context(), args[0])
+			hash, err := a.ownedItemHash(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -154,15 +158,28 @@ func (a *App) reserveCmd() *cobra.Command {
 	return cmd
 }
 
-func (a *App) markSold(cmd *cobra.Command, hash string) error {
-	return a.Client.MarkSold(cmd.Context(), hash)
-}
-func (a *App) deleteItem(cmd *cobra.Command, hash string) error {
-	return a.Client.DeleteItem(cmd.Context(), hash)
+// ownedItemHash resolves ITEM and refuses it unless the active account listed
+// it. The check lives here because only the CLI knows the Profile's user hash;
+// Wallapop's own answer to a foreign write carries no explanation (see
+// wallapop.ownWriteError).
+func (a *App) ownedItemHash(ctx context.Context, ref string) (string, error) {
+	it, err := a.Client.Item(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	me, err := a.userHash(ctx)
+	if err != nil {
+		return "", err
+	}
+	if it.SellerHash != me {
+		return "", output.Usagef("%s belongs to another seller (%s). Only your own items can be reserved, sold or deleted", it.Hash, it.SellerHash)
+	}
+	return it.Hash, nil
 }
 
-// destructiveItemCmd wraps the two irreversible item actions with a prompt or --yes.
-func (a *App) destructiveItemCmd(name, short, prompt string, run func(*cobra.Command, string) error) *cobra.Command {
+// destructiveItemCmd wraps the two irreversible item actions with a prompt or
+// --yes. done is the past-tense verb printed on success.
+func (a *App) destructiveItemCmd(name, done, short, prompt string, run func(context.Context, string) error) *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use: name + " ITEM", Short: short, Args: cobra.ExactArgs(1),
@@ -170,17 +187,17 @@ func (a *App) destructiveItemCmd(name, short, prompt string, run func(*cobra.Com
 			if err := a.requireSession(); err != nil {
 				return err
 			}
-			hash, err := a.Client.ResolveItemHash(cmd.Context(), args[0])
+			hash, err := a.ownedItemHash(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
 			if err := a.confirm(yes, fmt.Sprintf(prompt, hash)); err != nil {
 				return err
 			}
-			if err := run(cmd, hash); err != nil {
+			if err := run(cmd.Context(), hash); err != nil {
 				return err
 			}
-			return a.Printer.Print(actionResult{Action: name, Item: hash, OK: true})
+			return a.Printer.Print(actionResult{Action: done, Item: hash, OK: true})
 		},
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "do not prompt")

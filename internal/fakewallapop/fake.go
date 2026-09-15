@@ -260,6 +260,18 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// owned mirrors Wallapop's answer to an authenticated write on someone else's
+// item, recorded 2026-09-15: a bare 401 for reserve and delete, 403 for sold,
+// no body. Unauthenticated foreign writes were not exercised, so authed runs
+// first by assumption.
+func (s *Server) owned(w http.ResponseWriter, it *Item, status int) bool {
+	if it.Seller == UserHash {
+		return true
+	}
+	w.WriteHeader(status)
+	return false
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -481,7 +493,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 			"modified_date":   it.Modified.UnixMilli(),
 		})
 	case action == "" && r.Method == http.MethodDelete:
-		if !s.authed(w, r) {
+		if !s.authed(w, r) || !s.owned(w, it, 401) {
 			return
 		}
 		s.mu.Lock()
@@ -499,7 +511,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		w.WriteHeader(204)
 	case action == "reserve" && r.Method == http.MethodPut:
-		if !s.authed(w, r) {
+		if !s.authed(w, r) || !s.owned(w, it, 401) {
 			return
 		}
 		var body struct{ Reserved bool }
@@ -509,7 +521,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		w.WriteHeader(204)
 	case action == "sold" && r.Method == http.MethodPut:
-		if !s.authed(w, r) {
+		if !s.authed(w, r) || !s.owned(w, it, 403) {
 			return
 		}
 		s.mu.Lock()
