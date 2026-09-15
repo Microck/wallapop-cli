@@ -70,6 +70,7 @@ the cli keeps only that cookie and your device id, in a 0600 file under `~/.conf
 | `profile list / use / remove` | several accounts side by side |
 | `search [keywords] [--filter k=v]...` | search around your location; `search filters` lists valid keys |
 | `category list` | category ids |
+| `alert list` | your saved searches on wallapop; `watch add search --from-alert ID --name NAME` turns one into a watch |
 | `item show / open / favorite / unfavorite` | inspect a listing by hash or url |
 | `item reserve / sold / delete` | act on your own listings (`sold`, `delete` ask or need `--yes`) |
 | `user show / items / reviews` | look at a seller by hash, url or slug |

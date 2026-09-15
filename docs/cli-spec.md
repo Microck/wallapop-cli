@@ -22,10 +22,11 @@ Noun-verb throughout. No catch-all subcommand, no abbreviations.
 ## 4. Command tree
 
 ```
-auth       login | status | logout
+auth       login | status | refresh | logout
 profile    list | use | remove
 search     [keywords...] | filters
 category   list
+alert      list
 item       show | open | favorite | unfavorite | reserve | sold | delete
 user       show | items | reviews
 me         show | items | favorites
@@ -98,6 +99,23 @@ Selection order: `--profile` > `WALLAPOP_PROFILE` > default in config.
 
 - `category list [--tree]` from `GET /api/v3/categories`.
 
+### alert
+
+Wallapop's server-side Saved searches (CONTEXT.md), read-only: the CLI never creates,
+enables or deletes them.
+
+- `alert list` from `GET /api/v3/searchalerts/savedsearch/` (authenticated, needs
+  `X-AppVersion: 0` or the service answers 400). Each entry: id (UUID), title, keywords,
+  `location_label`, Location (lat/lng), radius, Filters (the stored query minus location and
+  bookkeeping, with Wallapop's own keys: `max_sale_price`, `order_by`, `category_id`...),
+  alert enabled, new hits, created. `category_ids` is stored as a list and replayed as the
+  first element under `category_id`, as the web does; other lists join with commas like the
+  CLI's own multi-value flags.
+- `watch add search --from-alert ID --name NAME` reads `GET .../savedsearch/{id}` and stores a
+  search Watch with that exact query, so its first Check returns what the web shows when the
+  alert is opened. Unknown id: `{"status":"NOT_FOUND"}` 404, exit 4. Keywords or search
+  flags alongside `--from-alert` are a usage error. Verified live 2026-09-15.
+
 ### item
 
 Item argument accepts a 12-char hash or an `es.wallapop.com/item/...` URL. Bare numeric ids
@@ -152,6 +170,7 @@ Not exposed: block/unblock, phone sharing, translation.
 Watches, Checks, Events and Sinks are defined in `CONTEXT.md`.
 
 - `watch add search [keywords...] [search flags] --name NAME [--notify SINK]... [--interval DUR] [--pages N] [--emit-initial]`
+  or `watch add search --from-alert ID --name NAME ...` (see alert).
 - `watch add item ITEM --name NAME [--notify]... [--emit-initial]`
 - `watch add seller USER --name NAME [--notify]... [--emit-initial]`
   `add` runs the first Check immediately as a silent baseline; with `--emit-initial` that

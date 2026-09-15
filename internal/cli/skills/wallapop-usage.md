@@ -27,6 +27,10 @@ The only secret kept is the `__Secure-next-auth.session-token` cookie. Profiles:
 
 The session slides: every authenticated command renews it for 30 days, and 30 days without one ends it. `wallapop watch check` renews it as a side effect, so a scheduled watch keeps the session alive. Without watches, schedule `wallapop auth refresh` (prints the new expiry); `auth status` shows the current one.
 
+## Saved searches
+
+`wallapop alert list` shows the account's server-side saved searches (read-only). `wallapop watch add search --from-alert ID --name NAME` copies one into a local watch.
+
 ## Search
 
 ```

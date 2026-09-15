@@ -127,7 +127,7 @@ Agent usage: wallapop skills get wallapop-usage`,
 
 	root.AddCommand(
 		a.authCmd(), a.profileCmd(),
-		a.searchCmd(), a.categoryCmd(),
+		a.searchCmd(), a.categoryCmd(), a.alertCmd(),
 		a.itemCmd(), a.userCmd(), a.meCmd(),
 		a.chatCmd(),
 		a.watchCmd(), a.sinkCmd(),
