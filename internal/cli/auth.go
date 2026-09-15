@@ -17,7 +17,7 @@ import (
 
 func (a *App) authCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "auth", Short: "Log in, inspect or remove the session for a profile"}
-	cmd.AddCommand(a.authLoginCmd(), a.authStatusCmd(), a.authLogoutCmd())
+	cmd.AddCommand(a.authLoginCmd(), a.authStatusCmd(), a.authRefreshCmd(), a.authLogoutCmd())
 	return cmd
 }
 
@@ -94,7 +94,7 @@ Examples:
 				return err
 			}
 			a.Creds.Profiles[a.Profile] = config.Session{
-				SessionCookie: a.Session.Cookie, DeviceID: deviceID, UserHash: me.Hash, Name: me.Name, UpdatedAt: time.Now().UTC(),
+				SessionCookie: a.Session.Cookie, SessionExpires: a.Session.CookieExpires.UTC(), DeviceID: deviceID, UserHash: me.Hash, Name: me.Name, UpdatedAt: time.Now().UTC(),
 			}
 			if err := a.saveCreds(); err != nil {
 				return err
@@ -128,14 +128,15 @@ Examples:
 }
 
 type authStatus struct {
-	Profile   string           `json:"profile"`
-	LoggedIn  bool             `json:"logged_in"`
-	Account   string           `json:"account,omitempty"`
-	UserHash  string           `json:"user_hash,omitempty"`
-	Source    string           `json:"source,omitempty"`
-	UpdatedAt *time.Time       `json:"updated_at,omitempty"`
-	Location  *config.Location `json:"location,omitempty"`
-	Valid     *bool            `json:"session_valid,omitempty"`
+	Profile        string           `json:"profile"`
+	LoggedIn       bool             `json:"logged_in"`
+	Account        string           `json:"account,omitempty"`
+	UserHash       string           `json:"user_hash,omitempty"`
+	Source         string           `json:"source,omitempty"`
+	UpdatedAt      *time.Time       `json:"updated_at,omitempty"`
+	SessionExpires *time.Time       `json:"session_expires,omitempty"`
+	Location       *config.Location `json:"location,omitempty"`
+	Valid          *bool            `json:"session_valid,omitempty"`
 }
 
 func (s authStatus) Pretty(w io.Writer, color bool) {
@@ -146,6 +147,9 @@ func (s authStatus) Pretty(w io.Writer, color bool) {
 		rows = append(rows, []string{"account", s.Account + " " + output.Dim(s.UserHash, color)}, []string{"source", s.Source})
 		if s.UpdatedAt != nil {
 			rows = append(rows, []string{"updated", s.UpdatedAt.Local().Format(time.RFC3339)})
+		}
+		if s.SessionExpires != nil {
+			rows = append(rows, []string{"expires", s.SessionExpires.Local().Format(time.RFC3339)})
 		}
 		if s.Valid != nil {
 			rows = append(rows, []string{"valid", fmt.Sprint(*s.Valid)})
@@ -164,29 +168,72 @@ func (a *App) authStatusCmd() *cobra.Command {
 		Short: "Show the active profile's session",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st := authStatus{Profile: a.Profile}
-			if p, ok := a.Cfg.Profiles[a.Profile]; ok {
-				st.Location = p.Location
+			// Mint before reading the stored session: the mint rotates the
+			// cookie and persists a new expiry, which is what should print.
+			var valid *bool
+			if check && a.Session != nil {
+				_, err := a.Session.AccessToken(cmd.Context())
+				valid = new(bool)
+				*valid = err == nil
 			}
-			if os.Getenv("WALLAPOP_SESSION_TOKEN") != "" {
-				st.LoggedIn, st.Source = true, "env WALLAPOP_SESSION_TOKEN"
-			} else if s, ok := a.Creds.Profiles[a.Profile]; ok {
-				st.LoggedIn, st.Source, st.Account, st.UserHash = true, "credentials", s.Name, s.UserHash
-				t := s.UpdatedAt
-				st.UpdatedAt = &t
-			}
-			if check && st.LoggedIn {
-				valid := true
-				if _, err := a.Session.AccessToken(cmd.Context()); err != nil {
-					valid = false
-				}
-				st.Valid = &valid
-			}
+			st := a.currentStatus()
+			st.Valid = valid
 			return a.Printer.Print(st)
 		},
 	}
 	cmd.Flags().BoolVar(&check, "check", false, "mint a token to verify the session still works")
 	return cmd
+}
+
+// currentStatus describes the active profile's session as stored right now.
+// Read it after any mint, since a mint rotates the cookie and its expiry.
+func (a *App) currentStatus() authStatus {
+	st := authStatus{Profile: a.Profile}
+	if p, ok := a.Cfg.Profiles[a.Profile]; ok {
+		st.Location = p.Location
+	}
+	if os.Getenv("WALLAPOP_SESSION_TOKEN") != "" {
+		st.LoggedIn, st.Source = true, "env WALLAPOP_SESSION_TOKEN"
+		// Env sessions are never persisted, so the only expiry known is the
+		// one seen on this process's rotation.
+		st.SessionExpires = timePtr(a.Session.CookieExpires)
+	} else if s, ok := a.Creds.Profiles[a.Profile]; ok {
+		st.LoggedIn, st.Source, st.Account, st.UserHash = true, "credentials", s.Name, s.UserHash
+		st.UpdatedAt, st.SessionExpires = timePtr(s.UpdatedAt), timePtr(s.SessionExpires)
+	}
+	return st
+}
+
+// timePtr turns a zero time into nil so JSON omits unknown timestamps.
+func timePtr(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+func (a *App) authRefreshCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "refresh",
+		Short: "Mint once to extend the session and show its new expiry",
+		Long: `Mint once to extend the session and show its new expiry.
+
+Wallapop re-issues the session cookie with a fresh 30-day expiry on every mint,
+so any authenticated command keeps the session alive. ` + "`watch check`" + ` does this
+on its own; this command is for people who schedule with cron instead of
+` + "`watch service`" + `, or who want to see how long the session has left.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.requireSession(); err != nil {
+				return err
+			}
+			// A fresh process has no cached token, so this always mints once.
+			if _, err := a.Session.AccessToken(cmd.Context()); err != nil {
+				return err
+			}
+			return a.Printer.Print(a.currentStatus())
+		},
+	}
 }
 
 func (a *App) authLogoutCmd() *cobra.Command {
@@ -212,11 +259,12 @@ func (a *App) authLogoutCmd() *cobra.Command {
 // profile
 
 type profileRow struct {
-	Name      string    `json:"name"`
-	Account   string    `json:"account,omitempty"`
-	UserHash  string    `json:"user_hash,omitempty"`
-	Default   bool      `json:"default"`
-	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	Name           string     `json:"name"`
+	Account        string     `json:"account,omitempty"`
+	UserHash       string     `json:"user_hash,omitempty"`
+	Default        bool       `json:"default"`
+	UpdatedAt      time.Time  `json:"updated_at,omitempty"`
+	SessionExpires *time.Time `json:"session_expires,omitempty"`
 }
 
 type profileList []profileRow
@@ -228,9 +276,13 @@ func (l profileList) Pretty(w io.Writer, color bool) {
 		if p.Default {
 			mark = "*"
 		}
-		rows = append(rows, []string{mark, p.Name, p.Account, output.Dim(p.UserHash, color)})
+		expires := ""
+		if p.SessionExpires != nil {
+			expires = p.SessionExpires.Local().Format(time.RFC3339)
+		}
+		rows = append(rows, []string{mark, p.Name, p.Account, output.Dim(p.UserHash, color), expires})
 	}
-	output.Table(w, color, []string{"", "PROFILE", "ACCOUNT", "HASH"}, rows)
+	output.Table(w, color, []string{"", "PROFILE", "ACCOUNT", "HASH", "EXPIRES"}, rows)
 }
 
 func (a *App) profileCmd() *cobra.Command {
@@ -242,7 +294,7 @@ func (a *App) profileCmd() *cobra.Command {
 				def := config.ResolveProfile("", a.Cfg)
 				list := profileList{}
 				for name, s := range a.Creds.Profiles {
-					list = append(list, profileRow{Name: name, Account: s.Name, UserHash: s.UserHash, Default: name == def, UpdatedAt: s.UpdatedAt})
+					list = append(list, profileRow{Name: name, Account: s.Name, UserHash: s.UserHash, Default: name == def, UpdatedAt: s.UpdatedAt, SessionExpires: timePtr(s.SessionExpires)})
 				}
 				sortProfiles(list)
 				return a.Printer.Print(list)

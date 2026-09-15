@@ -188,12 +188,13 @@ func (a *App) attachSession() {
 		return
 	}
 	a.Session = wallapop.NewSession(a.Client, cookie, deviceID)
-	a.Session.OnRotate = func(newCookie string) {
+	a.Session.OnRotate = func(newCookie string, expires time.Time) {
 		s, ok := a.Creds.Profiles[a.Profile]
 		if !ok || os.Getenv("WALLAPOP_SESSION_TOKEN") != "" {
 			return
 		}
 		s.SessionCookie = newCookie
+		s.SessionExpires = expires.UTC()
 		s.UpdatedAt = time.Now().UTC()
 		a.Creds.Profiles[a.Profile] = s
 		if err := config.SaveCredentials(a.Paths.CredentialsFile, a.Creds); err != nil {

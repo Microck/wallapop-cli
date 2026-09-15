@@ -407,6 +407,7 @@ Prints the events produced (none is fine: exit 0) and delivers them to sinks.`,
 				return err
 			}
 			events, err := a.runChecks(cmd.Context(), st, ws)
+			a.keepSessionAlive(cmd.Context())
 			if events == nil {
 				events = []store.Event{}
 			}
@@ -418,6 +419,21 @@ Prints the events produced (none is fine: exit 0) and delivers them to sinks.`,
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "run every watch of the profile, due or not")
 	return cmd
+}
+
+// keepSessionAlive mints once per check run when a stored session exists.
+// Watches read public data, so a scheduled timer would otherwise never mint
+// and the 30-day session would lapse. The mint is cached, so a run that
+// already needed auth costs nothing extra. Failure is a warning: the watches
+// themselves ran. An env session is skipped: its rotation is never persisted,
+// so minting would slide nothing.
+func (a *App) keepSessionAlive(ctx context.Context) {
+	if a.Session == nil || os.Getenv("WALLAPOP_SESSION_TOKEN") != "" {
+		return
+	}
+	if _, err := a.Session.AccessToken(ctx); err != nil {
+		fmt.Fprintf(a.Stderr, "wallapop: session keepalive failed: %v\n", err)
+	}
 }
 
 func (a *App) watchRunCmd() *cobra.Command {
@@ -444,6 +460,7 @@ interval, floored at 30s, with up to 10% jitter.`,
 					return err
 				}
 				events, err := a.runChecks(ctx, st, ws)
+				a.keepSessionAlive(ctx)
 				if ctx.Err() != nil {
 					return nil
 				}

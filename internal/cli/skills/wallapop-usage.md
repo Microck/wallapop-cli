@@ -25,6 +25,8 @@ wallapop auth status --check
 
 The only secret kept is the `__Secure-next-auth.session-token` cookie. Profiles: `--profile NAME` or `WALLAPOP_PROFILE`.
 
+The session slides: every authenticated command renews it for 30 days, and 30 days without one ends it. `wallapop watch check` renews it as a side effect, so a scheduled watch keeps the session alive. Without watches, schedule `wallapop auth refresh` (prints the new expiry); `auth status` shows the current one.
+
 ## Search
 
 ```

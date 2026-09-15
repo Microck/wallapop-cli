@@ -107,11 +107,14 @@ func Save(path string, cfg Config) error {
 // Session is what lets the CLI act as one Wallapop account. The cookie is the
 // only secret; access tokens are minted from it and never stored.
 type Session struct {
-	SessionCookie string    `toml:"session_cookie" json:"-"`
-	DeviceID      string    `toml:"device_id" json:"device_id"`
-	UserHash      string    `toml:"user_hash" json:"user_hash"`
-	Name          string    `toml:"name" json:"name"`
-	UpdatedAt     time.Time `toml:"updated_at" json:"updated_at"`
+	SessionCookie string `toml:"session_cookie" json:"-"`
+	DeviceID      string `toml:"device_id" json:"device_id"`
+	UserHash      string `toml:"user_hash" json:"user_hash"`
+	Name          string `toml:"name" json:"name"`
+	// SessionExpires is the Expires of the last rotated cookie: the moment the
+	// login lapses unless something mints before then. Zero when unknown.
+	SessionExpires time.Time `toml:"session_expires,omitempty" json:"session_expires,omitempty"`
+	UpdatedAt      time.Time `toml:"updated_at" json:"updated_at"`
 }
 
 type Credentials struct {
