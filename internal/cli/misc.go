@@ -6,8 +6,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -197,9 +195,9 @@ func (a *App) doctorCmd() *cobra.Command {
 					add("chat token", nil, "pubnub token issued")
 				}
 			}
-			if runtime.GOOS == "linux" {
-				out, _ := exec.Command("systemctl", "--user", "is-active", a.serviceUnitName()+".timer").Output()
-				add("schedule", nil, strings.TrimSpace(firstNonEmptyStr(string(out), "not installed")))
+			if u := a.serviceUnit(); u != nil {
+				state, _ := u.state()
+				add("schedule", nil, state)
 			}
 			if err := a.Printer.Print(rep); err != nil {
 				return err
@@ -210,13 +208,6 @@ func (a *App) doctorCmd() *cobra.Command {
 			return nil
 		},
 	}
-}
-
-func firstNonEmptyStr(a, b string) string {
-	if strings.TrimSpace(a) != "" {
-		return a
-	}
-	return b
 }
 
 // skills: embedded agent-facing docs

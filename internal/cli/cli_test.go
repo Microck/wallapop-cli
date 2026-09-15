@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -830,5 +831,57 @@ func TestAuthRefreshReportsNewExpiryAndAuthStatusShowsIt(t *testing.T) {
 	h.fake.MintEmpty = true
 	if r := h.run("", "auth", "refresh"); r.code != 3 {
 		t.Fatalf("rejected session should exit 3, got %d: %s", r.code, r.stderr)
+	}
+}
+
+// schedule
+
+func TestWatchCheckRotatesTheServiceLogAtTheCap(t *testing.T) {
+	h := newHarness(t)
+	logDir := filepath.Join(h.home, "state", "wallapop-cli")
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logFile := filepath.Join(logDir, "wallapop-watch-default.log")
+	if err := os.WriteFile(logFile, bytes.Repeat([]byte("x"), 1<<20+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.must("", "watch", "check", "--all")
+	if _, err := os.Stat(logFile + ".1"); err != nil {
+		t.Fatalf("oversized log should rotate to .1: %v", err)
+	}
+	if _, err := os.Stat(logFile); !os.IsNotExist(err) {
+		t.Fatal("the scheduler should get a fresh log on its next run")
+	}
+	// A second rotation overwrites .1 rather than growing a chain.
+	if err := os.WriteFile(logFile, bytes.Repeat([]byte("y"), 1<<20+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.must("", "watch", "check", "--all")
+	if raw, _ := os.ReadFile(logFile + ".1"); len(raw) == 0 || raw[0] != 'y' {
+		t.Fatal("second rotation should replace .1")
+	}
+	if entries, _ := os.ReadDir(logDir); len(entries) != 1 {
+		t.Fatalf("expected only the rotated log, got %d files", len(entries))
+	}
+}
+
+func TestServiceStatusAndDoctorReportNotInstalledWithoutUnitFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no scheduler integration on windows")
+	}
+	h := newHarness(t)
+	r := h.must("", "watch", "service", "status")
+	var v struct {
+		State string `json:"state"`
+	}
+	decode(t, r.stdout, &v)
+	if v.State != "not installed" {
+		t.Fatalf("status without unit files: %q", v.State)
+	}
+	h.login()
+	r = h.must("", "doctor")
+	if !strings.Contains(r.stdout, `"name": "schedule"`) || !strings.Contains(r.stdout, `"detail": "not installed"`) {
+		t.Fatalf("doctor should report the schedule state:\n%s", r.stdout)
 	}
 }
