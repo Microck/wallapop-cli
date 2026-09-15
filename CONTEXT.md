@@ -31,7 +31,7 @@ Wallapop's own taxonomy node for Items. Category-specific Filters exist only und
 
 **Watch**:
 A saved instruction to observe one target (a Search, an Item, or a Seller) and report changes. Lives locally, never on Wallapop's servers.
-_Avoid_: Alert, tracker, monitor, subscription
+_Avoid_: Alert (that is Wallapop's Saved search, the `alert` noun), tracker, monitor, subscription
 
 **Check**:
 One run of a Watch: fetch the current state, compare it with the last stored state, emit Events, store the new state. Idempotent.
@@ -39,14 +39,15 @@ _Avoid_: Poll, tick, scan
 
 **Event**:
 One observed change produced by a Check: new Item, price changed, reserved, sold, removed, Seller listed something.
-_Avoid_: Notification (that is the delivery, not the change), alert
+_Avoid_: Notification (that is the delivery, not the change), alert (a Saved search)
 
 **Sink**:
 A destination an Event is delivered to besides stdout: ntfy, webhook, or an executable.
 _Avoid_: Notifier, channel, target
 
 **Saved search**:
-Wallapop's server-side search alert, owned by the account. Distinct from a Watch.
+Wallapop's server-side search alert, owned by the account. Distinct from a Watch. The CLI
+exposes it as the `alert` noun (`alert list`, `watch add search --from-alert`).
 
 ### Account
 

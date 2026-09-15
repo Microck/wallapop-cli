@@ -20,6 +20,8 @@ const (
 	RotatedCookie = "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..rotated-session.cookie-value-that-is-long-enough-to-look-like-a-jwe-0123456789abcdef"
 	UserHash      = "kmznw7w2k7zn"
 	OtherHash     = "p8j35kmwr7z9"
+	// SavedSearchID is the one saved search the fake account owns.
+	SavedSearchID = "a456aa5a-3d86-49bd-a8ca-504f410b127c"
 )
 
 // Item is the fake's canonical listing; every endpoint renders from it.
@@ -188,6 +190,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		s.search(w, r)
 	case p == "/api/v3/search/filters/regular-filters":
 		s.filters(w, r)
+	case strings.HasPrefix(p, "/api/v3/searchalerts/savedsearch/"):
+		s.savedSearches(w, r)
 	case p == "/api/v3/categories":
 		writeJSON(w, 200, map[string]any{"categories": []map[string]any{
 			{"id": 100, "name": "Cars", "vertical_id": "cars", "subcategories": []any{}},
@@ -288,6 +292,44 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: "__Secure-next-auth.session-token", Value: RotatedCookie, Path: "/", HttpOnly: true, Secure: true, Expires: time.Now().Add(30 * 24 * time.Hour).Truncate(time.Second)})
 	// Not a real JWT: the CLI falls back to a four-minute cache when exp is unreadable.
 	writeJSON(w, 200, map[string]any{"token": "access-token", "idToken": "id", "expires": time.Now().Add(30 * 24 * time.Hour).Format(time.RFC3339), "user": map[string]any{}})
+}
+
+// savedSearches serves GET /api/v3/searchalerts/savedsearch/ and /{id} in the
+// shape recorded live on 2026-09-15 (ids and coordinates redacted). The
+// service rejects calls without X-AppVersion, so the fake does too.
+func (s *Server) savedSearches(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-AppVersion") == "" {
+		writeJSON(w, 400, map[string]any{"type": "about:blank", "title": "Bad Request", "status": 400, "detail": "Required header 'X-AppVersion' is not present."})
+		return
+	}
+	if !s.authed(w, r) {
+		return
+	}
+	saved := map[string]any{
+		"id":    SavedSearchID,
+		"title": "thinkpad x1",
+		"query": map[string]any{
+			"latitude": 41.39, "longitude": 2.17, "keywords": "thinkpad x1", "max_sale_price": 400.0, "distance_in_km": 50,
+			"order_by": "newest", "category_ids": []any{24200}, "condition": []any{"good", "fair"}, "country_code": "ES", "saved_search_id": SavedSearchID,
+		},
+		"placeholders":   map[string]any{},
+		"alert":          map[string]any{"enabled": true, "hits": 0, "distance": 10000, "last_hits_reset_at": "2026-09-15T11:43:00Z"},
+		"createdAt":      1789472639896,
+		"default_view":   true,
+		"experiment":     "exp_engagement_newvsold",
+		"items":          nil,
+		"description":    "All categories. Up to 400€. 08001 Barcelona. Up to 50 km",
+		"location_label": "08001 Barcelona",
+	}
+	switch id := strings.TrimPrefix(r.URL.Path, "/api/v3/searchalerts/savedsearch/"); id {
+	case "":
+		writeJSON(w, 200, []any{saved})
+	case SavedSearchID:
+		delete(saved["query"].(map[string]any), "saved_search_id")
+		writeJSON(w, 200, saved)
+	default:
+		writeJSON(w, 404, map[string]any{"status": "NOT_FOUND", "message": nil})
+	}
 }
 
 func (s *Server) searchItemJSON(it *Item) map[string]any {

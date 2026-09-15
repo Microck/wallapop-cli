@@ -3,9 +3,11 @@ package cli
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/Microck/wallapop-cli/internal/output"
 	"github.com/Microck/wallapop-cli/internal/wallapop"
@@ -25,8 +27,10 @@ type searchFlags struct {
 	filter     map[string]string
 }
 
-func (a *App) bindSearchFlags(cmd *cobra.Command, f *searchFlags) {
-	fl := cmd.Flags()
+// bindSearchFlags defines the search flags on cmd and returns them as their
+// own set, so callers can ask which of exactly these flags were given.
+func (a *App) bindSearchFlags(cmd *cobra.Command, f *searchFlags) *pflag.FlagSet {
+	fl := pflag.NewFlagSet("search", pflag.ContinueOnError)
 	fl.Float64Var(&f.lat, "lat", 0, "latitude of the search centre (default: profile location)")
 	fl.Float64Var(&f.lng, "lng", 0, "longitude of the search centre")
 	fl.IntVar(&f.distance, "distance", 0, "radius in km")
@@ -38,9 +42,11 @@ func (a *App) bindSearchFlags(cmd *cobra.Command, f *searchFlags) {
 	fl.StringVar(&f.since, "since", "", "listing age: today, week, month")
 	fl.StringVar(&f.sort, "sort", "", "order: relevance, newest, price_asc, price_desc")
 	fl.StringToStringVar(&f.filter, "filter", nil, "category-specific filter key=value, repeatable (see `wallapop search filters`)")
+	cmd.Flags().AddFlagSet(fl)
 	_ = cmd.RegisterFlagCompletionFunc("condition", cobra.FixedCompletions([]string{"new", "as_good_as_new", "good", "fair", "has_given_it_all"}, cobra.ShellCompDirectiveNoFileComp))
 	_ = cmd.RegisterFlagCompletionFunc("since", cobra.FixedCompletions([]string{"today", "week", "month"}, cobra.ShellCompDirectiveNoFileComp))
 	_ = cmd.RegisterFlagCompletionFunc("sort", cobra.FixedCompletions([]string{"relevance", "newest", "price_asc", "price_desc"}, cobra.ShellCompDirectiveNoFileComp))
+	return fl
 }
 
 var validConditions = map[string]bool{"new": true, "as_good_as_new": true, "good": true, "fair": true, "has_given_it_all": true}
@@ -209,6 +215,49 @@ Examples:
 		},
 	}
 	cmd.Flags().IntVar(&category, "category", 0, "category id")
+	return cmd
+}
+
+// alert: Wallapop's saved searches, read-only.
+
+type alertList []wallapop.SavedSearch
+
+func (l alertList) Pretty(w io.Writer, color bool) {
+	rows := make([][]string, 0, len(l))
+	for _, s := range l {
+		filters := make([]string, 0, len(s.Filters))
+		for k, v := range s.Filters {
+			filters = append(filters, k+"="+v)
+		}
+		sort.Strings(filters)
+		on := ""
+		if s.Enabled {
+			on = "on"
+		}
+		rows = append(rows, []string{output.Dim(s.ID, color), output.Truncate(s.Keywords, 24), fmt.Sprintf("%s %dkm", output.Truncate(s.Label, 18), s.RadiusKm), output.Truncate(strings.Join(filters, " "), 40), fmt.Sprint(s.Hits), on})
+	}
+	output.Table(w, color, []string{"ID", "KEYWORDS", "LOCATION", "FILTERS", "NEW", "ALERT"}, rows)
+}
+
+func (a *App) alertCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "alert", Short: "Wallapop's saved searches (server-side alerts), read-only"}
+	cmd.AddCommand(&cobra.Command{
+		Use: "list", Short: "List the account's saved searches", Args: cobra.NoArgs,
+		Long: `List the saved searches Wallapop keeps for the account, with the query each
+one runs. Turn one into a local watch with:
+
+  wallapop watch add search --from-alert ID --name NAME`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.requireSession(); err != nil {
+				return err
+			}
+			alerts, err := a.Client.SavedSearches(cmd.Context())
+			if err != nil {
+				return err
+			}
+			return a.Printer.Print(alertList(alerts))
+		},
+	})
 	return cmd
 }
 

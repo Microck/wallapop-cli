@@ -2,15 +2,20 @@ package wallapop
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // SearchParams mirrors the query keys Wallapop's /api/v3/search accepts. Extra
-// carries category-specific filters (brand, min_km, ...) that the CLI validates
-// against the filters endpoint rather than hardcoding.
+// carries category-specific filters (brand, min_km, ...) under Wallapop's own
+// keys: validated against the filters endpoint when a user types them, taken
+// as stored when they come from a saved search.
 type SearchParams struct {
 	Keywords   string
 	Lat, Lng   float64
@@ -332,8 +337,168 @@ func (p SearchParams) String() string {
 	if p.DistanceKm > 0 {
 		parts = append(parts, strconv.Itoa(p.DistanceKm)+"km")
 	}
-	for k, v := range p.Extra {
-		parts = append(parts, k+"="+v)
+	// Sorted so the same target always reads the same way in watch list.
+	keys := make([]string, 0, len(p.Extra))
+	for k := range p.Extra {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts = append(parts, k+"="+p.Extra[k])
 	}
 	return strings.Join(parts, " ")
+}
+
+// SavedSearch is Wallapop's server-side search alert, "Saved search" in
+// CONTEXT.md and the `alert` noun in the CLI. Filters holds the saved query
+// minus location and bookkeeping keys, under Wallapop's own parameter names,
+// so a script sees exactly what the alert runs.
+type SavedSearch struct {
+	ID          string            `json:"id"`
+	Title       string            `json:"title"`
+	Description string            `json:"description,omitempty"`
+	Keywords    string            `json:"keywords,omitempty"`
+	Label       string            `json:"location_label,omitempty"`
+	Location    Location          `json:"location"`
+	RadiusKm    int               `json:"radius_km,omitempty"`
+	Filters     map[string]string `json:"filters"`
+	Enabled     bool              `json:"enabled"`
+	Hits        int               `json:"hits"`
+	CreatedAt   time.Time         `json:"created_at"`
+}
+
+// SearchParams replays the saved query the way the web does when the alert is
+// opened. Keys the CLI types are mapped onto the typed fields so an imported
+// Watch stores the same shape as a hand-made one; anything else rides in
+// Extra unvalidated, since Wallapop itself stored the values.
+func (s SavedSearch) SearchParams() SearchParams {
+	p := SearchParams{Keywords: s.Keywords, Lat: s.Location.Lat, Lng: s.Location.Lng, DistanceKm: s.RadiusKm, Extra: map[string]string{}}
+	for k, v := range s.Filters {
+		switch k {
+		case "min_sale_price":
+			n, _ := strconv.Atoi(v)
+			p.MinPrice = &n
+		case "max_sale_price":
+			n, _ := strconv.Atoi(v)
+			p.MaxPrice = &n
+		case "condition":
+			p.Conditions = strings.Split(v, ",")
+		case "category_id":
+			p.CategoryID, _ = strconv.Atoi(v)
+		case "is_shippable":
+			p.Shippable = v == "true"
+		case "time_filter":
+			p.TimeFilter = v
+		case "order_by":
+			p.OrderBy = v
+		default:
+			p.Extra[k] = v
+		}
+	}
+	return p
+}
+
+// rawSavedSearch is GET /api/v3/searchalerts/savedsearch/ as recorded 2026-09-15.
+// query values are untyped: numbers, strings, and lists for category_ids.
+type rawSavedSearch struct {
+	ID          string         `json:"id"`
+	Title       string         `json:"title"`
+	Description string         `json:"description"`
+	Label       string         `json:"location_label"`
+	Query       map[string]any `json:"query"`
+	Alert       struct {
+		Enabled bool `json:"enabled"`
+		Hits    int  `json:"hits"`
+	} `json:"alert"`
+	CreatedAt int64 `json:"createdAt"`
+}
+
+// savedSearchHeaders: the searchalerts service rejects calls without X-AppVersion.
+var savedSearchHeaders = map[string]string{"X-AppVersion": "0"}
+
+// SavedSearches lists the account's saved searches (authenticated).
+func (c *Client) SavedSearches(ctx context.Context) ([]SavedSearch, error) {
+	var raw []rawSavedSearch
+	if _, err := c.do(ctx, request{method: http.MethodGet, base: c.APIBase, path: "/api/v3/searchalerts/savedsearch/", auth: true, rawHeaders: savedSearchHeaders}, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]SavedSearch, 0, len(raw))
+	for _, r := range raw {
+		out = append(out, normalizeSavedSearch(r))
+	}
+	return out, nil
+}
+
+// SavedSearch fetches one alert by id; an unknown id is KindNotFound (exit 4).
+func (c *Client) SavedSearch(ctx context.Context, id string) (SavedSearch, error) {
+	var raw rawSavedSearch
+	if _, err := c.do(ctx, request{method: http.MethodGet, base: c.APIBase, path: "/api/v3/searchalerts/savedsearch/" + url.PathEscape(id), auth: true, rawHeaders: savedSearchHeaders}, &raw); err != nil {
+		var e *Error
+		if errors.As(err, &e) && e.Kind == KindNotFound {
+			e.Msg = fmt.Sprintf("no saved search %q. See `wallapop alert list`", id)
+		}
+		return SavedSearch{}, err
+	}
+	return normalizeSavedSearch(raw), nil
+}
+
+// pluralQueryKeys are stored as lists but searched by their first element
+// under the singular key, as the web bundle does.
+var pluralQueryKeys = map[string]string{"category_ids": "category_id", "subcategory_ids": "subcategory_id"}
+
+func normalizeSavedSearch(r rawSavedSearch) SavedSearch {
+	s := SavedSearch{ID: r.ID, Title: r.Title, Description: r.Description, Label: r.Label, Enabled: r.Alert.Enabled, Hits: r.Alert.Hits, Filters: map[string]string{}}
+	if r.CreatedAt > 0 {
+		s.CreatedAt = time.UnixMilli(r.CreatedAt).UTC()
+	}
+	for k, v := range r.Query {
+		val := queryValue(v)
+		if val == "" {
+			continue
+		}
+		switch k {
+		case "keywords":
+			s.Keywords = val
+		case "latitude":
+			s.Location.Lat, _ = strconv.ParseFloat(val, 64)
+		case "longitude":
+			s.Location.Lng, _ = strconv.ParseFloat(val, 64)
+		case "distance_in_km":
+			s.RadiusKm, _ = strconv.Atoi(val)
+		case "country_code", "saved_search_id":
+			// Bookkeeping the search endpoint does not take.
+		default:
+			if singular, ok := pluralQueryKeys[k]; ok {
+				k = singular
+				val, _, _ = strings.Cut(val, ",")
+			}
+			s.Filters[k] = val
+		}
+	}
+	return s
+}
+
+// queryValue flattens a saved query value to the string the search endpoint
+// takes: numbers without a trailing ".0", lists comma-joined like the CLI's
+// own multi-value flags, null dropped.
+func queryValue(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(t)
+	case []any:
+		parts := make([]string, 0, len(t))
+		for _, e := range t {
+			if p := queryValue(e); p != "" {
+				parts = append(parts, p)
+			}
+		}
+		return strings.Join(parts, ",")
+	}
+	return fmt.Sprint(v)
 }

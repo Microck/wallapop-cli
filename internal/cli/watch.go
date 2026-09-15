@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/Microck/wallapop-cli/internal/config"
 	"github.com/Microck/wallapop-cli/internal/output"
@@ -171,19 +172,53 @@ func validWatchName(s string) bool {
 func (a *App) watchAddSearchCmd() *cobra.Command {
 	var sf searchFlags
 	var wf watchAddFlags
+	var fromAlert string
+	var searchFlagSet *pflag.FlagSet
 	cmd := &cobra.Command{
 		Use: "search [keywords...]", Short: "Watch a search for new items and price changes",
+		Long: `Watch a search for new items and price changes.
+
+Give keywords and search flags, or --from-alert ID to copy the query of one of
+the account's saved searches (see ` + "`wallapop alert list`" + `). The two are
+exclusive: the saved query is replayed as Wallapop stored it.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p, err := a.toParams(cmd, args, sf)
-			if err != nil {
-				return err
+			var p wallapop.SearchParams
+			if cmd.Flags().Changed("from-alert") {
+				if fromAlert == "" {
+					return output.Usagef("--from-alert needs a saved search id. See `wallapop alert list`")
+				}
+				if err := a.requireSession(); err != nil {
+					return err
+				}
+				if len(args) > 0 || searchFlagsGiven(searchFlagSet) {
+					return output.Usagef("--from-alert copies the saved search's query; drop the keywords and search flags")
+				}
+				saved, err := a.Client.SavedSearch(cmd.Context(), fromAlert)
+				if err != nil {
+					return err
+				}
+				p = saved.SearchParams()
+			} else {
+				var err error
+				if p, err = a.toParams(cmd, args, sf); err != nil {
+					return err
+				}
 			}
 			return a.addWatch(cmd.Context(), store.KindSearch, watch.SearchTarget{Params: p}, wf)
 		},
 	}
-	a.bindSearchFlags(cmd, &sf)
+	searchFlagSet = a.bindSearchFlags(cmd, &sf)
 	a.bindWatchAddFlags(cmd, &wf, true)
+	cmd.Flags().StringVar(&fromAlert, "from-alert", "", "copy the query of this saved search (see `wallapop alert list`)")
 	return cmd
+}
+
+// searchFlagsGiven reports whether any flag in the set was passed. The set
+// shares its flags with the command, so Changed state is the command's.
+func searchFlagsGiven(fs *pflag.FlagSet) bool {
+	given := false
+	fs.Visit(func(*pflag.Flag) { given = true })
+	return given
 }
 
 func (a *App) watchAddItemCmd() *cobra.Command {

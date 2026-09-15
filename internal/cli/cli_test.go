@@ -885,3 +885,56 @@ func TestServiceStatusAndDoctorReportNotInstalledWithoutUnitFiles(t *testing.T) 
 		t.Fatalf("doctor should report the schedule state:\n%s", r.stdout)
 	}
 }
+
+// alerts (saved searches)
+
+func TestAlertListAndWatchFromAlertReuseTheSavedQuery(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	r := h.must("", "alert", "list")
+	var alerts []struct {
+		ID       string                `json:"id"`
+		Keywords string                `json:"keywords"`
+		Label    string                `json:"location_label"`
+		Location struct{ Lat float64 } `json:"location"`
+		RadiusKm int                   `json:"radius_km"`
+		Filters  map[string]string     `json:"filters"`
+		Enabled  bool                  `json:"enabled"`
+	}
+	decode(t, r.stdout, &alerts)
+	if len(alerts) != 1 || alerts[0].ID != fakewallapop.SavedSearchID || alerts[0].Keywords != "thinkpad x1" || alerts[0].Label == "" || alerts[0].Location.Lat != 41.39 || alerts[0].RadiusKm != 50 || !alerts[0].Enabled {
+		t.Fatalf("alert list: %s", r.stdout)
+	}
+	if alerts[0].Filters["max_sale_price"] != "400" || alerts[0].Filters["category_id"] != "24200" || alerts[0].Filters["country_code"] != "" {
+		t.Fatalf("filters should carry the query minus the location and bookkeeping keys: %v", alerts[0].Filters)
+	}
+
+	before := len(h.fake.RequestsTo("/api/v3/search"))
+	h.must("", "watch", "add", "search", "--from-alert", fakewallapop.SavedSearchID, "--name", "tp")
+	reqs := h.fake.RequestsTo("/api/v3/search")
+	if len(reqs) != before+1 {
+		t.Fatalf("the baseline check should run one search, got %d", len(reqs)-before)
+	}
+	q := reqs[len(reqs)-1].Query
+	want := map[string]string{"keywords": "thinkpad x1", "latitude": "41.39", "longitude": "2.17", "distance_in_km": "50", "max_sale_price": "400", "order_by": "newest", "category_id": "24200", "condition": "good,fair"}
+	for k, v := range want {
+		if q.Get(k) != v {
+			t.Errorf("query %s = %q, want %q", k, q.Get(k), v)
+		}
+	}
+	for _, k := range []string{"country_code", "saved_search_id", "category_ids"} {
+		if q.Has(k) {
+			t.Errorf("query must not forward %s", k)
+		}
+	}
+
+	if r := h.run("", "watch", "add", "search", "--from-alert", "00000000-0000-0000-0000-000000000000", "--name", "nope"); r.code != 4 {
+		t.Fatalf("unknown alert should exit 4, got %d: %s", r.code, r.stderr)
+	}
+	if r := h.run("", "watch", "add", "search", "bici", "--from-alert", fakewallapop.SavedSearchID, "--name", "mixed"); r.code != 2 {
+		t.Fatalf("keywords plus --from-alert should be a usage error, got %d", r.code)
+	}
+	if r := h.run("", "watch", "add", "search", "--from-alert=", "--name", "empty"); r.code != 2 {
+		t.Fatalf("an empty --from-alert must not fall through to a keyword-less watch, got %d", r.code)
+	}
+}

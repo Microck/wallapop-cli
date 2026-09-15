@@ -158,7 +158,7 @@ A good test drives the CLI the way a user or script does and asserts only on obs
 
 - Email and password login and the MFA email-approve flow.
 - Creating or editing Items, including image upload.
-- Wallapop's server-side saved searches, offers, wallet, shipping, payments, reviews writing, settings edits, blocking users, phone sharing, translation.
+- Creating or deleting Wallapop's server-side saved searches (reading them and importing one as a Watch arrived with #6), offers, wallet, shipping, payments, reviews writing, settings edits, blocking users, phone sharing, translation.
 - Reading browser cookie stores directly.
 - A TUI, an MCP server, an `agent` command.
 - Windows scheduled-task installation, Windows ACL hardening.
