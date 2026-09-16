@@ -358,42 +358,26 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 			// hold up this message and every one queued behind it. A receipt
 			// is worth less than the stream, so a full queue drops it.
 			receipts := make(chan wallapop.Incoming, 32)
+			// Receipts outlive ctx: a message already on screen should stop
+			// showing as merely "received" even if the reader quits a moment
+			// later. The whole drain shares one budget, so a dead endpoint
+			// cannot turn /quit into a minute of waiting.
+			receiptCtx, stopReceipts := context.WithCancel(context.WithoutCancel(ctx))
+			defer stopReceipts()
 			var receiptsDone sync.WaitGroup
 			receiptsDone.Add(1)
-			// Quitting must not strand a receipt for a message already on
-			// screen, or the sender keeps seeing "received" for something the
-			// reader has read. Cancel, then let the worker finish what is
-			// queued; each post is bounded so /quit still returns promptly.
-			defer func() {
-				cancel()
-				receiptsDone.Wait()
-			}()
 			go func() {
 				defer receiptsDone.Done()
-				mark := func(in wallapop.Incoming) {
-					rctx, done := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-					defer done()
-					_ = ch.MarkSeen(rctx, in.Channel, in.TimeToken)
-				}
-				for {
-					select {
-					case in := <-receipts:
-						mark(in)
-					case <-ctx.Done():
-						for {
-							select {
-							case in := <-receipts:
-								mark(in)
-							default:
-								return
-							}
-						}
-					}
+				// Ranging until close means the producer decides when there is
+				// nothing more to acknowledge, so shutdown cannot race a
+				// message that has been printed but not yet enqueued.
+				for in := range receipts {
+					_ = ch.MarkSeen(receiptCtx, in.Channel, in.TimeToken)
 				}
 			}()
 			subErr := make(chan error, 1)
 			go func() {
-				subErr <- ch.Subscribe(ctx, func(in wallapop.Incoming) {
+				err := ch.Subscribe(ctx, func(in wallapop.Incoming) {
 					if in.Conversation != conv.Hash || in.FromSelf {
 						return
 					}
@@ -411,6 +395,20 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 					default:
 					}
 				})
+				// Subscribe has returned, so no further sends are possible and
+				// the worker can be told the queue is final.
+				close(receipts)
+				subErr <- err
+			}()
+			// Stop the subscriber first, then let the worker finish what it
+			// was handed. Registered after the goroutines so it runs before
+			// the ctx cancel above.
+			defer func() {
+				cancel()
+				<-subErr
+				stop := time.AfterFunc(5*time.Second, stopReceipts)
+				receiptsDone.Wait()
+				stop.Stop()
 			}()
 			lines := make(chan string)
 			go func() {
@@ -423,6 +421,9 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 			for {
 				select {
 				case err := <-subErr:
+					// The drain below reads this channel too; put it back so
+					// shutdown does not block on an already-consumed value.
+					subErr <- err
 					if ctx.Err() != nil {
 						return nil
 					}

@@ -9,15 +9,20 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
 // PubNub REST, the three calls the web chat makes. The channel strings come
 // from Wallapop and are opaque; the CLI never constructs one.
 
-// Chat is a live messaging handle for one account.
+// Chat is a live messaging handle for one account. It is safe to use from
+// several goroutines: `chat open` subscribes on one, publishes typed lines on
+// another and posts receipts on a third, and all three refresh the same token.
 type Chat struct {
-	client   *Client
+	client *Client
+	// mu guards token, which every call refreshes and reads.
+	mu       sync.Mutex
 	token    ChatToken
 	UserHash string
 }
@@ -31,7 +36,12 @@ func (c *Client) NewChat(ctx context.Context, userHash string) (*Chat, error) {
 	return &Chat{client: c, token: tok, UserHash: userHash}, nil
 }
 
+// refreshToken fetches a new token when the current one is close to expiring.
+// The lock is held across the fetch so two callers cannot both decide the token
+// is stale and race each other to replace it.
 func (ch *Chat) refreshToken(ctx context.Context) error {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
 	if time.Until(ch.token.Expires) > time.Minute {
 		return nil
 	}
@@ -44,7 +54,10 @@ func (ch *Chat) refreshToken(ctx context.Context) error {
 }
 
 func (ch *Chat) baseQuery() url.Values {
-	return url.Values{"uuid": {ch.UserHash}, "auth": {ch.token.Token}, "pnsdk": {"wallapop-cli"}}
+	ch.mu.Lock()
+	token := ch.token.Token
+	ch.mu.Unlock()
+	return url.Values{"uuid": {ch.UserHash}, "auth": {token}, "pnsdk": {"wallapop-cli"}}
 }
 
 // Send publishes a text message. Payload and meta match the web client
