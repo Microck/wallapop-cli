@@ -1,0 +1,54 @@
+---
+title: wallapop-cli
+description: Drive Wallapop from the terminal. Search, listings, chat and watches, JSON by default.
+---
+
+Wallapop is a browser-and-app-only marketplace with no public API. `wallapop` is a single Go
+binary that logs in with your own account by importing your browser session, then exposes the
+site's buyer-side features as noun-verb commands that print JSON.
+
+That makes the marketplace scriptable: you can pipe a search into `jq`, keep a watch running
+from a systemd timer, or hand the whole thing to an agent.
+
+<Cards>
+  <Card title="Install" href="/docs/install">
+    One command on macOS, Linux and Windows.
+  </Card>
+  <Card title="Log in" href="/docs/auth">
+    Export a cookie once, then stay logged in for about a month.
+  </Card>
+  <Card title="Command reference" href="/docs/reference">
+    Every command and flag, generated from the binary.
+  </Card>
+  <Card title="Watches" href="/docs/watches">
+    Turn a search into a stream of events.
+  </Card>
+</Cards>
+
+## What it looks like
+
+```bash
+wallapop search "bici de carretera" --max-price 400 --distance 25 --sort newest
+wallapop item show 8j38qg58w8z9
+wallapop chat send 8f1c2 "Sigue disponible?"
+wallapop watch add search "vinilos" --max-price 20
+```
+
+Every command prints JSON unless you ask for something else:
+
+```bash
+wallapop search "teclado mecanico" --format pretty
+wallapop search "teclado mecanico" | jq -r '.items[] | "\(.price) \(.title)"'
+```
+
+## What it will not do
+
+Wallet, shipping and payments are out, permanently. So are settings edits, blocking users and
+phone sharing. The CLI reads and writes the things you would do while browsing and talking to
+sellers, and stops there.
+
+<Callout type="warn" title="Unofficial">
+  Wallapop publishes no API. This talks to the same endpoints the website uses, so it can break
+  when they change something. When that happens the CLI fails loudly with a prefilled issue link
+  rather than quietly returning nothing. See [API changes](/docs/api-changes).
+</Callout>

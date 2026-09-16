@@ -1,0 +1,113 @@
+---
+title: Authentication
+description: Export a browser cookie once, then stay logged in for about a month.
+---
+
+Wallapop has no password API worth using. Google, Apple, Facebook and password accounts all end
+up at the same place: a session cookie in your browser. The CLI imports that cookie and then
+keeps it alive on its own.
+
+<Callout type="idea" title="Why a cookie">
+  An email and password login was tried and rejected; see ADR 0001 in the repository. Cookie
+  import is the single supported path because it works identically for every account type.
+</Callout>
+
+## Export the cookie
+
+<Steps>
+<Step>
+### Install a cookie exporter
+
+Any extension that exports Netscape-format cookies works. Cookie-Editor and "Get cookies.txt"
+are the common ones.
+</Step>
+
+<Step>
+### Log in to Wallapop in your browser
+
+Go to `es.wallapop.com` and sign in normally, however you usually do.
+</Step>
+
+<Step>
+### Export cookies for the site
+
+Export for `wallapop.com` and save the file. You need `__Secure-next-auth.session-token`; the
+CLI also picks up `device_id` if it is there.
+
+<Callout type="warn" title="Cookie-Editor exports JSON by default">
+  The CLI reads Netscape format, pasted `name=value` pairs, or a bare cookie value. If your
+  exporter offers a format choice, pick Netscape or "cookies.txt".
+</Callout>
+</Step>
+
+<Step>
+### Import it
+
+```bash
+wallapop auth login --cookies ~/Downloads/cookies.txt
+```
+
+Or paste the value straight in, with no file:
+
+```bash
+wallapop auth login --cookies-stdin
+```
+</Step>
+</Steps>
+
+Login validates the session immediately and tells you who you are, so a bad export fails at once
+rather than three commands later. It also saves your account's location as the default search
+location, so your first search already works.
+
+## Staying logged in
+
+Wallapop rotates the session cookie as you use it. The CLI re-persists each rotation, so a
+single login lasts roughly a month of regular use rather than a day.
+
+```bash
+wallapop auth status          # is the session still good
+wallapop auth status --check  # exit non-zero if not, for scripts
+wallapop auth refresh         # force a refresh now
+```
+
+## Profiles
+
+Each account gets its own session, location and watches.
+
+```bash
+wallapop auth login --cookies alt.txt --profile alt
+wallapop profile list
+wallapop profile use alt      # change the default
+wallapop search "bici" --profile alt
+```
+
+## In CI
+
+Pass the cookie by environment variable and no credentials file is needed:
+
+```bash
+export WALLAPOP_SESSION_TOKEN="..."
+wallapop search "bici" --format jsonl
+```
+
+## Where things live
+
+<Files>
+  <Folder name="$XDG_CONFIG_HOME/wallapop-cli" defaultOpen>
+    <File name="config.toml" />
+    <File name="credentials.toml" />
+  </Folder>
+  <Folder name="$XDG_DATA_HOME/wallapop-cli">
+    <File name="watches.db" />
+  </Folder>
+</Files>
+
+`credentials.toml` is kept separate from `config.toml` and written at mode `0600`, so sharing
+your config never leaks your session.
+
+## Log out
+
+```bash
+wallapop auth logout --profile alt   # keeps config and watches
+wallapop profile remove alt          # removes everything for that account
+```

@@ -1,4 +1,4 @@
-.PHONY: build test check fmt vet lint install
+.PHONY: build test check fmt vet lint install docs docs-check
 
 build:
 	go build -o bin/wallapop ./cmd/wallapop
@@ -17,6 +17,15 @@ lint:
 
 check: vet lint test
 	test -z "$$(gofmt -l .)"
+
+# docs regenerates the command reference from the cobra tree. docs-check is
+# what CI runs: it regenerates and fails if anything moved, so the published
+# flags cannot drift from the binary's.
+docs:
+	go run ./cmd/docsgen
+
+docs-check: docs
+	git diff --exit-code -- docs-site/content/docs/reference
 
 install:
 	go install -ldflags "-X main.version=$$(git describe --tags --always --dirty)" ./cmd/wallapop

@@ -1,0 +1,58 @@
+---
+title: Install
+description: Get the binary on macOS, Linux or Windows.
+---
+
+<Callout type="warn" title="Not released yet">
+  `v0.1.0` has not been tagged, so the install paths below are the intended ones and not yet
+  verified end to end. Until then, build from source with Go. This page will be trimmed to
+  whatever actually works once the release ships.
+</Callout>
+
+## From source
+
+The only path verified today.
+
+```bash
+go install github.com/Microck/wallapop-cli/cmd/wallapop@latest
+wallapop --version
+```
+
+## Planned release paths
+
+<Tabs items={['Script', 'Homebrew', 'Scoop', 'Go']} id="install-method">
+  <Tab value="Script">
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/Microck/wallapop-cli/main/scripts/install.sh | sh
+    ```
+  </Tab>
+  <Tab value="Homebrew">
+    ```bash
+    brew install Microck/tap/wallapop
+    ```
+  </Tab>
+  <Tab value="Scoop">
+    ```bash
+    scoop bucket add microck https://github.com/Microck/scoop-bucket
+    scoop install wallapop
+    ```
+  </Tab>
+  <Tab value="Go">
+    ```bash
+    go install github.com/Microck/wallapop-cli/cmd/wallapop@latest
+    ```
+  </Tab>
+</Tabs>
+
+Releases will carry `checksums.txt` and a GitHub provenance attestation, verifiable with
+`gh attestation verify`.
+
+## Check it works
+
+```bash
+wallapop --version
+wallapop doctor
+```
+
+`doctor` checks that the config parses, the session mints, Wallapop is reachable and the chat
+token can be fetched. Run it first whenever something behaves oddly.

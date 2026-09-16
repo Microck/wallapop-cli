@@ -1,0 +1,91 @@
+---
+title: Watches
+description: Turn a search, an item or a seller into a stream of events.
+---
+
+A watch is a saved query the CLI re-runs on demand and diffs against what it saw last time.
+What comes out is events, not results: only what changed since the previous check.
+
+```bash
+wallapop watch add search "vinilos" --max-price 20 --distance 30
+wallapop watch add item 8j38qg58w8z9
+wallapop watch add seller npj9yx8o406e
+wallapop watch check --all
+```
+
+## What you get
+
+Search watches diff the first `--pages` pages: hashes they have not seen, and price changes on
+hashes they have. Item watches diff the item detail. Seller watches diff the seller's listings.
+
+Event types are `item.new`, `item.price_changed`, `item.reserved`, `item.unreserved`,
+`item.sold`, `item.removed`, `item.edited` and `seller.new_item`.
+
+```json
+{
+  "type": "item.price_changed",
+  "watch": "iphone",
+  "profile": "default",
+  "at": "2026-09-14T10:40:00Z",
+  "item": {
+    "hash": "...",
+    "title": "...",
+    "price": { "amount": 250, "currency": "EUR" },
+    "url": "..."
+  },
+  "change": { "from": 300, "to": 250 }
+}
+```
+
+Every event is reported once. State lives in a local SQLite database, so a check that crashes
+halfway does not replay what it already emitted.
+
+```bash
+wallapop watch events iphone --since 24h
+```
+
+## Sinks
+
+By default events go to stdout. Sinks send them somewhere else, and live in `config.toml`
+rather than the database so they are easy to review and version.
+
+<Tabs items={['ntfy', 'webhook', 'exec']} id="sink-type">
+  <Tab value="ntfy">
+    ```toml
+    [sinks.phone]
+    type = "ntfy"
+    url = "https://ntfy.sh"
+    topic = "wallapop"
+    token_file = "~/.config/wallapop-cli/ntfy-token"
+    ```
+  </Tab>
+  <Tab value="webhook">
+    ```toml
+    [sinks.discord]
+    type = "webhook"
+    url = "https://discord.com/api/webhooks/..."
+    template = "discord"
+    ```
+
+    The body is the event JSON. `template = "discord"` wraps it in `{content: ...}`.
+  </Tab>
+  <Tab value="exec">
+    ```toml
+    [sinks.script]
+    type = "exec"
+    command = ["~/bin/on-wallapop-event"]
+    ```
+
+    The command receives one event as JSON on stdin, per event.
+  </Tab>
+</Tabs>
+
+```bash
+wallapop sink list
+wallapop sink test phone   # sends a synthetic event
+```
+
+<Callout type="info" title="Test the sink before you rely on it">
+  `sink test` is the difference between a watch that is quietly failing to notify you and one
+  you can trust. Run it once when you add a sink.
+</Callout>

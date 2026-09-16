@@ -26,3 +26,34 @@ jobs:
         run: go test ./... -count=1
       - name: build
         run: go build ./...
+      # The command reference is generated from the cobra tree. If a flag moved
+      # and nobody regenerated, the published docs are wrong, so fail here.
+      - name: docs reference is current
+        run: make docs-check
+
+  docs-site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: docs-site/pnpm-lock.yaml
+      - name: generate command reference
+        run: make docs
+      - name: install
+        run: pnpm install --frozen-lockfile
+        working-directory: docs-site
+      - name: typecheck
+        run: pnpm typecheck
+        working-directory: docs-site
+      - name: build
+        run: pnpm build
+        working-directory: docs-site

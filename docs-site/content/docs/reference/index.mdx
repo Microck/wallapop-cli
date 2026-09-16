@@ -1,0 +1,40 @@
+---
+title: Command reference
+description: Every command and flag, generated from the binary.
+---
+
+The pages under here are generated from the CLI's own command tree by `cmd/docsgen`, so the
+flags documented are the flags the binary has. CI regenerates them and fails if anything moved,
+which is what stops this reference drifting from the code.
+
+To regenerate after changing a command:
+
+```bash
+make docs
+```
+
+<Callout type="info" title="Do not edit these by hand">
+  Changes to the generated pages are overwritten. Edit the command's `Short`, `Long` and flag
+  usage strings in Go instead; they are the source.
+</Callout>
+
+## Shape of the command set
+
+Commands are noun-verb: the noun is the thing, the verb is what you do to it.
+
+```bash
+wallapop search "bici"
+wallapop item show HASH
+wallapop user items USER
+wallapop chat send CONV TEXT
+wallapop watch add search "bici"
+```
+
+Global flags apply everywhere:
+
+| Flag | What it does |
+| --- | --- |
+| `--profile NAME` | Use a different account |
+| `--format json\|pretty\|jsonl` | Output format |
+| `--error-format json` | Machine-readable error envelope |
+| `--debug` | Log requests to stderr, secrets redacted |

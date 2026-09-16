@@ -95,6 +95,8 @@ func (a *App) rootCmd() *cobra.Command {
 Output is JSON by default so every command pipes into jq. Use --format pretty
 for humans. Errors go to stderr; exit codes are documented in docs/cli-spec.md.
 
+Documentation: https://wallapop.micr.dev
+
 Examples:
   wallapop auth login
   wallapop search "thinkpad x1" --max-price 400 --format pretty

@@ -1,0 +1,53 @@
+---
+title: When Wallapop changes its API
+description: Why the CLI fails loudly instead of quietly returning nothing.
+---
+
+Wallapop publishes no API. Everything here talks to the endpoints the website uses, recorded by
+watching the site work. Those endpoints change without notice.
+
+The choice this CLI makes is to fail loudly. A search that silently returns zero results because
+a field moved is worse than a search that stops and says so, because the quiet one costs you the
+listing you were waiting for.
+
+## What it looks like
+
+When a known endpoint answers with a shape the CLI does not understand, it exits `7` and prints
+what it saw, along with a link that opens a prefilled GitHub issue.
+
+```bash
+wallapop search "bici"
+```
+
+```
+wallapop: wallapop returned a response the cli does not understand
+  endpoint: GET /api/v3/search
+  decode: json: cannot unmarshal string into field price of type float64
+
+Report this: https://github.com/Microck/wallapop-cli/issues/new?title=...
+```
+
+The report carries the endpoint, the status and the decode error. It carries no cookie, no
+token and no personal data: secrets are redacted from every log line and every error the CLI
+prints.
+
+## Telling failures apart
+
+Exit `7` means the endpoint answered and the answer was wrong-shaped. That is a code problem and
+worth reporting.
+
+Exit `5` means CloudFront blocked the request or you were rate limited. That is not an API
+change; wait and retry. The client retries once with a browser user agent on its own when
+CloudFront rejects the honest one.
+
+Exit `6` is the network. Retry.
+
+## Checking your setup first
+
+```bash
+wallapop doctor
+```
+
+`doctor` checks the config parses, the session mints, `api.wallapop.com` is reachable, the chat
+token can be fetched, and what the scheduler reports. Run it before filing anything: most
+surprises are an expired session rather than a changed API.

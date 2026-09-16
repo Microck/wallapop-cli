@@ -1,0 +1,44 @@
+---
+title: Exit codes
+description: What each exit status means, and which ones are worth retrying.
+---
+
+Every command exits with a code you can branch on. Nothing prints an error to stdout, so a
+script can read stdout and check `$?` independently.
+
+| Code | Meaning | Retry? |
+| --- | --- | --- |
+| `0` | Success, including "nothing changed" | - |
+| `1` | Generic failure | Maybe |
+| `2` | Usage: bad flags, unknown filter key, missing location | No, fix the command |
+| `3` | Auth: no session, session rejected, MFA pending | No, log in again |
+| `4` | Not found: item, user, conversation or watch | No |
+| `5` | Blocked or rate limited (CloudFront 403, HTTP 429) | Yes, after a wait |
+| `6` | Network or timeout | Yes |
+| `7` | API changed: a known endpoint returned an unexpected shape | No, [report it](/docs/api-changes) |
+| `130` | Interrupted | - |
+
+## Using them
+
+```bash
+if ! wallapop auth status --check; then
+  echo "session expired" >&2
+  exit 1
+fi
+```
+
+Back off on the ones worth retrying and give up on the ones that are not:
+
+```bash
+wallapop watch check --all
+case $? in
+  0) ;;
+  5|6) sleep 300; wallapop watch check --all ;;
+  *)  exit 1 ;;
+esac
+```
+
+<Callout type="idea" title="Pair with the error envelope">
+  `--error-format json` gives you a stable `category` string next to the code, which is easier
+  to read than a number when you are logging failures. See [Output](/docs/output).
+</Callout>

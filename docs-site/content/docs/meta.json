@@ -1,0 +1,17 @@
+{
+  "title": "wallapop-cli",
+  "pages": [
+    "index",
+    "---Getting started---",
+    "install",
+    "auth",
+    "---Using it---",
+    "output",
+    "watches",
+    "scheduling",
+    "---Reference---",
+    "reference",
+    "exit-codes",
+    "api-changes"
+  ]
+}
