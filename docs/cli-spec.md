@@ -258,8 +258,9 @@ rest of the client, with no MCP SDK.
 
 - Each tool is defined as a CLI argv and runs the command in-process, so a
   tool's output is the same JSON the command prints, by construction. A command
-  that fails comes back as a tool error whose text is the `--error-format json`
-  envelope, exit code included; a malformed call (unknown tool, argument of the
+  that fails comes back as a tool error carrying whatever it printed first and
+  then the `--error-format json` envelope, exit code included, so a `watch
+  check` that broke halfway still reports the Events it committed; a malformed call (unknown tool, argument of the
   wrong type, missing required argument) is a JSON-RPC `-32602` instead, since
   no command ran.
 - Tools: `search`, `item_show`, `user_show`, `watch_check`. Arguments mirror the
@@ -279,8 +280,14 @@ rest of the client, with no MCP SDK.
   `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), `~/.codex/config.toml`
   (or `$CODEX_HOME/config.toml`) and `~/.cursor/mcp.json`. The command is the
   running executable, the args are `mcp` plus `--profile NAME` when one is
-  given. Other entries survive; codex's TOML is edited as text so comments and
-  key order survive too. Output is `{harness,path,action,command,args}` with
+  given. Other entries survive, and so do keys inside this one that the CLI
+  does not own (`env`, timeouts): only `command` and `args` are written.
+  Codex's TOML is edited as text so comments and key order survive; an existing
+  entry written in a spelling that rewrite cannot match (`["mcp_servers"."wallapop"]`,
+  an inline table) stops the install with the lines to paste, rather than
+  appending a duplicate table that would break the file. A config that is a
+  symlink is followed, so a dotfile manager keeps its file. Output is
+  `{harness,path,action,command,args}` with
   action `added`, `updated` or `unchanged`, so a second run is a no-op that
   says so.
 
