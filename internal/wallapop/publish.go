@@ -120,7 +120,32 @@ func (c *Client) CreateItem(ctx context.Context, in CreateInput) (Item, error) {
 	if out.ID == "" {
 		return Item{}, &Error{Kind: KindAPIChanged, Endpoint: "POST /api/v3/items", Msg: "wallapop returned no item id"}
 	}
-	return c.Item(ctx, out.ID)
+	// The listing exists from here on. A fresh hash can take a moment to be
+	// readable, and failing the command over that would invite a retry that
+	// publishes the listing twice, so fall back to what was just sent.
+	it, err := c.Item(ctx, out.ID)
+	if err != nil {
+		if c.Notice != nil {
+			c.Notice("published " + out.ID + ", but reading it back failed: " + err.Error())
+		}
+		return in.published(out.ID), nil
+	}
+	return it, nil
+}
+
+// published describes a listing straight from what was sent, for the window
+// where the API has the id but cannot serve the item yet.
+func (in CreateInput) published(id string) Item {
+	return Item{
+		Hash:        id,
+		Title:       in.Title,
+		Description: in.Description,
+		Price:       in.Price,
+		Currency:    "EUR",
+		CategoryID:  in.CategoryLeaf,
+		Condition:   in.Condition,
+		Location:    Location{Lat: in.Lat, Lng: in.Lng},
+	}
 }
 
 // uploadComponents opens the web's upload session for this listing. The
@@ -154,10 +179,14 @@ func (c *Client) EditItem(ctx context.Context, hash, ownerHash string, in EditIn
 	if ownerHash != "" && current.SellerHash != "" && current.SellerHash != ownerHash {
 		return Item{}, &Error{Kind: KindUsage, Endpoint: "PUT /api/v3/items/" + current.Hash, Msg: "this listing belongs to another account; edit is refused"}
 	}
-	payload := map[string]any{
-		"attributes": map[string]any{},
+	// The write replaces the whole attribute set, so the listing's existing
+	// category attributes (a car's brand/model/year) go back untouched or a
+	// title-only edit would wipe them.
+	attrs := map[string]any{}
+	for k, v := range current.Attributes {
+		attrs[k] = v
 	}
-	attrs := payload["attributes"].(map[string]any)
+	payload := map[string]any{"attributes": attrs}
 	set := func(dst *string, src *string) {
 		if src != nil {
 			*dst = *src
@@ -175,7 +204,11 @@ func (c *Client) EditItem(ctx context.Context, hash, ownerHash string, in EditIn
 	for k, v := range in.Attrs {
 		attrs[k] = v
 	}
-	payload["category_leaf_id"] = c.editLeafID(ctx, in, current)
+	leaf, err := c.editLeafID(ctx, in, current)
+	if err != nil {
+		return Item{}, err
+	}
+	payload["category_leaf_id"] = leaf
 	// `item edit` exposes no location flag, so the listing's own coordinates
 	// go back unchanged. When the item detail carries none, the field is left
 	// out rather than resubmitted as 0,0, which would move the listing into
@@ -191,23 +224,31 @@ func (c *Client) EditItem(ctx context.Context, hash, ownerHash string, in EditIn
 }
 
 // editLeafID recovers the listing's leaf category for the write payload.
-// Item detail exposes the taxonomy path, not the leaf id, so the path is
-// matched back against the create tree (CreateCategories builds names with
-// the same separator). When nothing resolves this falls back to the id the
-// item carries, which is the root taxonomy: wrong for deep categories, but
-// the shape the write contract was recorded with.
-func (c *Client) editLeafID(ctx context.Context, in EditInput, current Item) string {
+// Item detail exposes the taxonomy path, not a leaf id, so the path is
+// matched back against the create tree, which CreateCategories names with the
+// same separator. A single-level taxonomy needs no lookup: its one id is the
+// leaf. A nested path that will not resolve is an error rather than a guess,
+// because sending a root id as the leaf recategorises the listing.
+func (c *Client) editLeafID(ctx context.Context, in EditInput, current Item) (string, error) {
 	if in.CategoryLeaf > 0 {
-		return strconv.Itoa(in.CategoryLeaf)
+		return strconv.Itoa(in.CategoryLeaf), nil
 	}
-	if current.Category != "" {
-		if cats, err := c.CreateCategories(ctx); err == nil {
-			if cat, err := ResolveCreateCategory(cats, current.Category); err == nil {
-				return strconv.Itoa(cat.LeafID)
-			}
+	if !strings.Contains(current.Category, ">") && current.CategoryID > 0 {
+		return strconv.Itoa(current.CategoryID), nil
+	}
+	cats, err := c.CreateCategories(ctx)
+	if err != nil {
+		return "", err
+	}
+	cat, err := ResolveCreateCategory(cats, current.Category)
+	if err != nil {
+		return "", &Error{
+			Kind:     KindAPIChanged,
+			Endpoint: "PUT /api/v3/items/" + current.Hash,
+			Msg:      "cannot tell which leaf category " + current.Hash + " sits in (" + current.Category + "), and editing it would have to resend one. Report this listing",
 		}
 	}
-	return strconv.Itoa(current.CategoryID)
+	return strconv.Itoa(cat.LeafID), nil
 }
 
 // writeItem sends a multipart item write (image files plus an `item` JSON

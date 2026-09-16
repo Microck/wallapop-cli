@@ -59,6 +59,9 @@ func (c *Client) Item(ctx context.Context, ref string) (Item, error) {
 	page.Description = firstNonEmpty(page.Description, detail.Description)
 	page.Category = firstNonEmpty(page.Category, detail.Category)
 	page.Condition = firstNonEmpty(page.Condition, detail.Condition)
+	// Only the detail endpoint exposes the category attribute table, and
+	// `item edit` has to resend it or the write clears it.
+	page.Attributes = detail.Attributes
 	return page, nil
 }
 
@@ -100,12 +103,8 @@ type itemDetail struct {
 		PostalCode string  `json:"postal_code"`
 		Country    string  `json:"country_code"`
 	} `json:"location"`
-	TypeAttributes struct {
-		Condition struct {
-			Value string `json:"value"`
-		} `json:"condition"`
-	} `json:"type_attributes"`
-	Shipping struct {
+	TypeAttributes typeAttrs `json:"type_attributes"`
+	Shipping       struct {
 		ItemIsShippable bool `json:"item_is_shippable"`
 	} `json:"shipping"`
 	Favorited flag `json:"favorited"`
@@ -114,6 +113,35 @@ type itemDetail struct {
 		Favorites int `json:"favorites"`
 	} `json:"counters"`
 	ModifiedDate msTime `json:"modified_date"`
+}
+
+// typeAttrs decodes the category attribute table. Each entry arrives as a
+// {"value": ...} object (recorded live: condition, and on vertical listings
+// brand/model/year); entries shaped otherwise are skipped, since the item
+// write payload takes flat scalars.
+type typeAttrs map[string]any
+
+func (m *typeAttrs) UnmarshalJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	out := typeAttrs{}
+	for k, v := range raw {
+		var d struct {
+			Value any `json:"value"`
+		}
+		if err := json.Unmarshal(v, &d); err == nil && d.Value != nil {
+			out[k] = d.Value
+		}
+	}
+	*m = out
+	return nil
+}
+
+func (m typeAttrs) str(key string) string {
+	s, _ := m[key].(string)
+	return s
 }
 
 func (c *Client) itemFromAPI(ctx context.Context, hash string) (Item, error) {
@@ -132,7 +160,8 @@ func (c *Client) itemFromAPI(ctx context.Context, hash string) (Item, error) {
 		Currency:    d.Price.Cash.Currency,
 		Category:    taxonomyPath(d.Taxonomy),
 		SellerHash:  d.User.ID,
-		Condition:   d.TypeAttributes.Condition.Value,
+		Condition:   d.TypeAttributes.str("condition"),
+		Attributes:  d.TypeAttributes,
 		Shippable:   d.Shipping.ItemIsShippable,
 		Favorited:   d.Favorited.Flag,
 		Location:    Location{Lat: d.Location.Latitude, Lng: d.Location.Longitude, City: d.Location.City, PostalCode: d.Location.PostalCode, Country: d.Location.Country},

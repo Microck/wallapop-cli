@@ -1086,6 +1086,21 @@ func TestItemEditChangesFields(t *testing.T) {
 	}
 }
 
+// An edit resends the whole attribute set, so a title-only change must not
+// drop the listing's category attributes.
+func TestItemEditKeepsCategoryAttrs(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(fakewallapop.Item{
+		Hash: "hasheeeddddw", Title: "Old", Price: 10, Seller: fakewallapop.UserHash,
+		Attrs: map[string]string{"brand": "Volkswagen"},
+	})
+	h.must("", "item", "edit", it.Hash, "--title", "New")
+	if got := h.fake.Items[it.Hash].Attrs["brand"]; got != "Volkswagen" {
+		t.Fatalf("brand after title edit = %q, want Volkswagen", got)
+	}
+}
+
 func TestItemEditForeignIsRefused(t *testing.T) {
 	h := newHarness(t)
 	h.login()

@@ -35,11 +35,14 @@ type Item struct {
 	Price       float64
 	Condition   string
 	Images      int
-	Seller      string
-	Reserved    bool
-	Sold        bool
-	Removed     bool // page 404s, API detail 404s
-	Modified    time.Time
+	// Attrs are the listing's category attributes beyond the common four,
+	// served under type_attributes and rewritten by edits.
+	Attrs    map[string]string
+	Seller   string
+	Reserved bool
+	Sold     bool
+	Removed  bool // page 404s, API detail 404s
+	Modified time.Time
 }
 
 type Conversation struct {
@@ -519,7 +522,7 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 			"price":           map[string]any{"cash": map[string]any{"amount": it.Price, "currency": "EUR"}},
 			"images":          fakeImages(it.Hash, it.Images),
 			"location":        map[string]any{"latitude": 40.4, "longitude": -3.7, "city": "Madrid", "postal_code": "28001", "country_code": "ES"},
-			"type_attributes": map[string]any{"condition": map[string]any{"value": s.itemCondition(it)}},
+			"type_attributes": s.itemTypeAttrs(it),
 			"shipping":        map[string]bool{"item_is_shippable": true},
 			"favorited":       map[string]bool{"flag": s.Favorites[it.Hash]},
 			"counters":        map[string]int{"views": 12, "favorites": 3, "conversations": 1},
@@ -799,6 +802,16 @@ func (s *Server) itemDesc(it *Item) string {
 	return "desc " + it.Title
 }
 
+// itemTypeAttrs mirrors the detail endpoint's attribute table: every entry is
+// a {"value": ...} object, condition included.
+func (s *Server) itemTypeAttrs(it *Item) map[string]any {
+	out := map[string]any{"condition": map[string]any{"value": s.itemCondition(it)}}
+	for k, v := range it.Attrs {
+		out[k] = map[string]any{"value": v}
+	}
+	return out
+}
+
 func (s *Server) itemCondition(it *Item) string {
 	if it.Condition != "" {
 		return it.Condition
@@ -913,6 +926,19 @@ func (s *Server) editItem(w http.ResponseWriter, r *http.Request, it *Item) {
 	if images >= 0 {
 		it.Images = images
 	}
+	// The write replaces the attribute set, so the fake stores exactly what
+	// arrived: an edit that drops an attribute really loses it.
+	stored := map[string]string{}
+	for k, v := range flat {
+		switch k {
+		case "title", "description", "price_amount", "condition":
+			continue
+		}
+		if sv, ok := v.(string); ok {
+			stored[k] = sv
+		}
+	}
+	it.Attrs = stored
 	it.Modified = time.Now()
 	s.mu.Unlock()
 	writeJSON(w, 200, map[string]any{})

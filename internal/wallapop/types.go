@@ -18,27 +18,31 @@ type Location struct {
 }
 
 type Item struct {
-	Hash        string    `json:"hash"`
-	Title       string    `json:"title"`
-	Description string    `json:"description,omitempty"`
-	Price       float64   `json:"price"`
-	Currency    string    `json:"currency"`
-	CategoryID  int       `json:"category_id,omitempty"`
-	Category    string    `json:"category,omitempty"`
-	SellerHash  string    `json:"seller_hash,omitempty"`
-	Condition   string    `json:"condition,omitempty"`
-	Reserved    bool      `json:"reserved"`
-	Sold        bool      `json:"sold"`
-	Expired     bool      `json:"expired"`
-	Shippable   bool      `json:"shippable"`
-	Favorited   bool      `json:"favorited"`
-	Location    Location  `json:"location"`
-	Views       int       `json:"views,omitempty"`
-	Favorites   int       `json:"favorites,omitempty"`
-	Images      []string  `json:"images,omitempty"`
-	URL         string    `json:"url"`
-	CreatedAt   time.Time `json:"created_at,omitempty"`
-	ModifiedAt  time.Time `json:"modified_at,omitempty"`
+	Hash        string  `json:"hash"`
+	Title       string  `json:"title"`
+	Description string  `json:"description,omitempty"`
+	Price       float64 `json:"price"`
+	Currency    string  `json:"currency"`
+	CategoryID  int     `json:"category_id,omitempty"`
+	Category    string  `json:"category,omitempty"`
+	SellerHash  string  `json:"seller_hash,omitempty"`
+	Condition   string  `json:"condition,omitempty"`
+	// Attributes is the category attribute table (a car's brand/model/year,
+	// a garment's size). Only `item edit` reads it, to resend what it is not
+	// changing, so it stays out of the CLI's own output.
+	Attributes map[string]any `json:"-"`
+	Reserved   bool           `json:"reserved"`
+	Sold       bool           `json:"sold"`
+	Expired    bool           `json:"expired"`
+	Shippable  bool           `json:"shippable"`
+	Favorited  bool           `json:"favorited"`
+	Location   Location       `json:"location"`
+	Views      int            `json:"views,omitempty"`
+	Favorites  int            `json:"favorites,omitempty"`
+	Images     []string       `json:"images,omitempty"`
+	URL        string         `json:"url"`
+	CreatedAt  time.Time      `json:"created_at,omitempty"`
+	ModifiedAt time.Time      `json:"modified_at,omitempty"`
 }
 
 type SearchPage struct {
