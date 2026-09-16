@@ -230,7 +230,7 @@ anything is published. Location defaults to the profile's.
 
 Examples:
   wallapop item create --title "MTB" --description "Barely used" --price 120 --category MTB --condition good --image bike1.jpg --image bike2.jpg
-  wallapop item create --title "Golf" --price 8000 --category Cars --condition good --attr brand=Volkswagen --attr year=2019 --image car.jpg`,
+  wallapop item create --title "Golf" --description "One owner" --price 8000 --category Cars --condition good --attr brand=Volkswagen --attr year=2019 --image car.jpg`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := a.requireSession(); err != nil {
@@ -391,11 +391,23 @@ func (a *App) itemEditCmd() *cobra.Command {
 	return cmd
 }
 
+// commonAttrFlags are the payload fields that have their own typed flags.
+// Routing them through --attr would let `--attr title=x` quietly beat
+// `--title`, and would put price_amount on the wire as a string.
+var commonAttrFlags = map[string]string{
+	"title":        "--title",
+	"description":  "--description",
+	"condition":    "--condition",
+	"price_amount": "--price",
+}
+
 // parseItemAttrs turns --attr key=value pairs into a map, rejecting unknown
 // keys against the category's attribute list before anything is published.
+// Keys are stored under the category's own spelling: the API drops the
+// attribute when the casing does not match.
 func parseItemAttrs(pairs []string, cat wallapop.CreateCategory) (map[string]string, error) {
 	out := map[string]string{}
-	allowed := map[string]string{"title": "title", "description": "description", "condition": "condition", "price_amount": "price_amount"}
+	allowed := map[string]string{}
 	for _, a := range cat.Attrs {
 		allowed[strings.ToLower(a)] = a
 	}
@@ -404,7 +416,11 @@ func parseItemAttrs(pairs []string, cat wallapop.CreateCategory) (map[string]str
 		if !ok || k == "" {
 			return nil, output.Usagef("bad --attr %q. Use key=value", p)
 		}
-		canon, ok := allowed[strings.ToLower(k)]
+		lower := strings.ToLower(k)
+		if flag, ok := commonAttrFlags[lower]; ok {
+			return nil, output.Usagef("set %s with %s, not --attr", lower, flag)
+		}
+		canon, ok := allowed[lower]
 		if !ok {
 			return nil, output.Usagef("unknown attribute %q for category %s. Valid: %s", k, cat.Name, strings.Join(cat.Attrs, ", "))
 		}

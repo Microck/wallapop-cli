@@ -1051,6 +1051,25 @@ func TestItemCreateRejectsUnknownAttr(t *testing.T) {
 	}
 }
 
+// The common fields have typed flags; --attr must not be a second way in,
+// or `--attr title=` would silently beat `--title`.
+func TestItemCreateRejectsCommonAttr(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	img := filepath.Join(h.home, "a.png")
+	testPNG(t, img)
+	r := h.run("", "item", "create",
+		"--title", "T", "--description", "D", "--price", "5",
+		"--category", "17001", "--condition", "good",
+		"--attr", "Price_Amount=9", "--image", img)
+	if r.code != 2 || !strings.Contains(r.stderr, "--price") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	if h.fake.CreateCalls != 0 {
+		t.Fatal("create reached Wallapop despite a common --attr key")
+	}
+}
+
 func TestItemEditChangesFields(t *testing.T) {
 	h := newHarness(t)
 	h.login()
