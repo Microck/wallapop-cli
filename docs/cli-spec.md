@@ -198,11 +198,12 @@ Watches, Checks, Events and Sinks are defined in `CONTEXT.md`.
   a launchd agent (macOS) that runs `wallapop watch check --all --profile ...`. On Windows
   it prints the `schtasks` command to run by hand in cmd.exe (whole minutes, rounded up).
   Other platforms get a usage error. The unit pins the environment that decides where the
-  CLI reads and writes: `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `WALLAPOP_CONFIG`
-  and the three base-URL overrides go into the unit as they stood at install time, because a
-  scheduler starts a job with a bare environment and the timer would otherwise check a
-  different, empty state database and report nothing. `WALLAPOP_SESSION_TOKEN` is never
-  written: unit files are world-readable. `uninstall` fails if the scheduler cannot be stopped. On
+  CLI reads and writes: `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`,
+  `WALLAPOP_CONFIG` and the three base-URL overrides go into the unit as they stood at
+  install time, because a scheduler starts a job with a bare environment and the timer would
+  otherwise check a different, empty state database and report nothing. Path overrides are
+  made absolute first, since the scheduler runs the job from its own working directory.
+  `WALLAPOP_SESSION_TOKEN` is never written: unit files are world-readable. `uninstall` fails if the scheduler cannot be stopped. On
   Linux, install also runs `loginctl enable-linger`, without which a user timer stops at
   logout and does not start at boot. `status` says `not installed` when the unit files are
   missing, otherwise what the scheduler reports: `active`/`inactive`/`failed` on systemd

@@ -9,6 +9,7 @@ package cli
 import (
 	"encoding/xml"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,58 @@ func TestSystemdUnitPinsTheInstallEnvironmentAndQuotesTheExecutable(t *testing.T
 	if !strings.Contains(timer, "OnUnitActiveSec=10min") || !strings.Contains(timer, "WantedBy=timers.target") {
 		t.Fatalf("timer must repeat at the interval and be installable:\n%s", timer)
 	}
+}
+
+// systemd expands % specifiers inside unit values: an unknown one makes it
+// drop the whole assignment, a known one substitutes something else. Either
+// way the scheduled check would reach the wrong place, silently.
+func TestSystemdUnitDoublesPercentAgainstSpecifierExpansion(t *testing.T) {
+	env := [][2]string{{"WALLAPOP_API_BASE_URL", "https://example.test/%2Fpath"}}
+	service, _ := systemdUnits("default", "/opt/100%cool/wallapop", checkArgs, "/home/u/50% full/w.log", time.Minute, env)
+	for _, want := range []string{
+		`Environment="WALLAPOP_API_BASE_URL=https://example.test/%%2Fpath"`,
+		`ExecStart="/opt/100%%cool/wallapop"`,
+		"append:/home/u/50%% full/w.log",
+	} {
+		if !strings.Contains(service, want) {
+			t.Fatalf("unit does not escape %%:\n%s", service)
+		}
+	}
+	if strings.Contains(strings.ReplaceAll(service, "%%", ""), "%") {
+		t.Fatalf("a bare %% is left somewhere in the unit:\n%s", service)
+	}
+}
+
+// A scheduler runs the job from its own working directory, so a relative
+// override recorded as given would resolve somewhere else entirely.
+func TestServiceEnvMakesPathOverridesAbsolute(t *testing.T) {
+	t.Setenv("WALLAPOP_CONFIG", "custom/config.toml")
+	want, err := filepath.Abs("custom/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range serviceEnv() {
+		if kv[0] != "WALLAPOP_CONFIG" {
+			continue
+		}
+		if kv[1] != want {
+			t.Fatalf("relative config override not resolved: got %q, want %q", kv[1], want)
+		}
+		return
+	}
+	t.Fatal("WALLAPOP_CONFIG missing from the pinned environment")
+}
+
+// HOME is where every default path comes from when the XDG variables are
+// unset, so a unit that does not carry it can land on another home.
+func TestServiceEnvCarriesHome(t *testing.T) {
+	t.Setenv("HOME", "/home/someone-else")
+	for _, kv := range serviceEnv() {
+		if kv[0] == "HOME" && kv[1] == "/home/someone-else" {
+			return
+		}
+	}
+	t.Fatal("HOME must be pinned into the unit")
 }
 
 // scanPlist walks the document the way a parser does, failing on anything

@@ -762,24 +762,38 @@ func (a *App) serviceCommandLine() (string, []string, error) {
 	return exe, args, nil
 }
 
-// serviceEnvKeys are the variables that decide where the CLI reads and writes
-// and which backend it talks to. systemd and launchd start a job with a bare
-// environment, so anyone whose shell points the CLI elsewhere would get a
-// timer reading a different, empty state database from the one they installed
-// from, checking nothing and reporting nothing, with no error anywhere.
+// serviceEnvPathKeys and serviceEnvURLKeys are the variables that decide where
+// the CLI reads and writes and which backend it talks to. systemd and launchd
+// start a job with a bare environment, so anyone whose shell points the CLI
+// elsewhere would get a timer reading a different, empty state database from
+// the one they installed from, checking nothing and reporting nothing, with no
+// error anywhere. HOME is in the list because it is where the paths come from
+// when the XDG variables are unset, which is the common case.
 // WALLAPOP_SESSION_TOKEN is deliberately absent: it is a secret, and a unit
 // file is world-readable.
-var serviceEnvKeys = []string{
-	"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "WALLAPOP_CONFIG",
-	"WALLAPOP_API_BASE_URL", "WALLAPOP_WEB_BASE_URL", "WALLAPOP_PUBNUB_BASE_URL",
-}
+var (
+	serviceEnvPathKeys = []string{"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "WALLAPOP_CONFIG"}
+	serviceEnvURLKeys  = []string{"WALLAPOP_API_BASE_URL", "WALLAPOP_WEB_BASE_URL", "WALLAPOP_PUBNUB_BASE_URL"}
+)
 
 // serviceEnv freezes the current values of those variables into the unit, so
 // the scheduled run resolves the same paths as the install did. Unset stays
-// unset: the defaults derive from $HOME, which the scheduler provides.
+// unset. Paths are made absolute first: a scheduler starts the job from its
+// own working directory, where a relative override would point at something
+// else entirely.
 func serviceEnv() [][2]string {
 	var env [][2]string
-	for _, k := range serviceEnvKeys {
+	for _, k := range serviceEnvPathKeys {
+		v := os.Getenv(k)
+		if v == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(v); err == nil {
+			v = abs
+		}
+		env = append(env, [2]string{k, v})
+	}
+	for _, k := range serviceEnvURLKeys {
 		if v := os.Getenv(k); v != "" {
 			env = append(env, [2]string{k, v})
 		}
@@ -795,14 +809,16 @@ func serviceEnv() [][2]string {
 //
 // ExecStart is word-split, so the executable is quoted: a home directory with
 // a space in it would otherwise produce a unit that fails on every trigger.
-// The append: paths take the rest of the line and need no quoting.
+// The append: paths take the rest of the line and need no quoting, but every
+// value still has its % doubled against specifier expansion.
 func systemdUnits(profile, exe string, args []string, logFile string, iv time.Duration, env [][2]string) (service, timer string) {
 	var envLines strings.Builder
 	for _, kv := range env {
 		envLines.WriteString("Environment=" + systemdQuote(kv[0]+"="+kv[1]) + "\n")
 	}
+	log := systemdLiteral(logFile)
 	service = fmt.Sprintf("[Unit]\nDescription=wallapop-cli watch checks (%s)\n\n[Service]\nType=oneshot\n%sExecStart=%s %s\nStandardOutput=append:%s\nStandardError=append:%s\n",
-		profile, envLines.String(), systemdQuote(exe), strings.Join(args, " "), logFile, logFile)
+		profile, envLines.String(), systemdQuote(exe), systemdLiteral(strings.Join(args, " ")), log, log)
 	timer = fmt.Sprintf("[Unit]\nDescription=wallapop-cli watch timer (%s)\n\n[Timer]\nOnBootSec=2m\nOnUnitActiveSec=%s\n\n[Install]\nWantedBy=timers.target\n",
 		profile, formatSystemd(iv))
 	return service, timer
@@ -904,10 +920,18 @@ func (a *App) serviceInstall(iv time.Duration) error {
 	return a.Printer.Print(view)
 }
 
-// systemdQuote wraps a value in the double quotes systemd's unit parser
-// understands, so a path or a value with a space survives word splitting.
+// systemdLiteral escapes a value so systemd reads it as the text it is. A %
+// starts a specifier expansion: an unknown one makes systemd drop the whole
+// assignment, and a known one silently substitutes something else, so a path
+// or a percent-encoded URL carrying % must double it.
+func systemdLiteral(s string) string {
+	return strings.ReplaceAll(s, "%", "%%")
+}
+
+// systemdQuote is systemdLiteral plus the double quotes the unit parser
+// understands, so a path or a value with a space also survives word splitting.
 func systemdQuote(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+	return `"` + systemdLiteral(strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)) + `"`
 }
 
 // xmlEscape makes a string safe as plist text. encoding/xml's escaper turns
