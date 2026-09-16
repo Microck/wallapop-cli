@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Microck/wallapop-cli/internal/config"
 	"github.com/Microck/wallapop-cli/internal/mcp"
 	"github.com/Microck/wallapop-cli/internal/output"
 )
@@ -64,10 +65,12 @@ Files written: ~/.claude.json (claude-code), ~/.codex/config.toml (codex),
 				exe = "wallapop" // fall back to PATH lookup by the harness
 			}
 			// The profile is part of the server identity: a harness installed
-			// with --profile work must keep acting as that account.
+			// for a non-default profile must keep acting as that account. The
+			// flag and WALLAPOP_PROFILE both select one; a bare install stays
+			// unpinned so the config default keeps applying.
 			serverArgs := []string{"mcp"}
-			if a.flagProfile != "" {
-				serverArgs = append(serverArgs, "--profile", a.flagProfile)
+			if resolved := config.ResolveProfile(a.flagProfile, a.Cfg); resolved != "" && resolved != "default" {
+				serverArgs = append(serverArgs, "--profile", resolved)
 			}
 			change, err := mcp.Install(args[0], exe, serverArgs)
 			if err != nil {
