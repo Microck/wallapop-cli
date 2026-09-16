@@ -223,7 +223,10 @@ func stripOwnedKeys(body string) string {
 	lines := strings.Split(body, "\n")
 	kept := make([]string, 0, len(lines))
 	for i := 0; i < len(lines); i++ {
-		if !ownedKey.MatchString(lines[i]) {
+		// A line only starts an assignment when everything above it is a
+		// complete parse. Inside a multi-line string, a line reading
+		// `command = ...` is somebody's text, not a key.
+		if !ownedKey.MatchString(lines[i]) || !parsesTOML(strings.Join(lines[:i], "\n")) {
 			kept = append(kept, lines[i])
 			continue
 		}
@@ -232,14 +235,18 @@ func stripOwnedKeys(body string) string {
 	return strings.Join(kept, "\n")
 }
 
+func parsesTOML(s string) bool {
+	var parsed map[string]any
+	return toml.Unmarshal([]byte(s), &parsed) == nil
+}
+
 // assignmentEnd returns the index of the last line of the assignment starting
 // at start. A value may run over several lines, and a bracket inside a string
 // or a comment means nothing, so the TOML parser decides where it ends rather
 // than a character count: the first prefix that parses is the whole value.
 func assignmentEnd(lines []string, start int) int {
 	for end := start; end < len(lines); end++ {
-		var parsed map[string]any
-		if toml.Unmarshal([]byte(strings.Join(lines[start:end+1], "\n")), &parsed) == nil {
+		if parsesTOML(strings.Join(lines[start:end+1], "\n")) {
 			return end
 		}
 	}
