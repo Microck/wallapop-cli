@@ -192,7 +192,26 @@ func installTOML(path, command string, args []string) (string, error) {
 	if crlf {
 		body = strings.ReplaceAll(body, "\r\n", "\n")
 	}
+	// Detect a table-valued command or args from the parsed document, so
+	// explicit child tables (`[mcp_servers.wallapop.command]`) and dotted or
+	// inline spellings are refused before any text is rewritten.
+	tableValued := func(entry map[string]any) (string, bool) {
+		for _, key := range []string{"command", "args"} {
+			switch entry[key].(type) {
+			case map[string]any:
+				return key, true
+			case []any:
+				for _, element := range entry[key].([]any) {
+					if _, ok := element.(map[string]any); ok {
+						return key, true
+					}
+				}
+			}
+		}
+		return "", false
+	}
 	entryExists := false
+	entry := map[string]any(nil)
 	if strings.TrimSpace(body) != "" {
 		var doc map[string]any
 		if err := toml.Unmarshal(raw, &doc); err != nil {
@@ -202,28 +221,16 @@ func installTOML(path, command string, args []string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		entry, err := table(servers, ServerName, path)
+		entry, err = table(servers, ServerName, path)
 		if err != nil {
 			return "", err
 		}
 		if entry != nil {
-			// Explicit child tables lie outside the text range we rewrite.
-			// Check decoded values so dotted and escaped spellings agree too.
-			for _, key := range []string{"command", "args"} {
-				value := entry[key]
-				if values, ok := value.([]any); ok {
-					for _, element := range values {
-						if _, ok := element.(map[string]any); ok {
-							value = element
-							break
-						}
-					}
-				}
-				if _, ok := value.(map[string]any); ok {
-					return "", fmt.Errorf("%s has a table-valued mcp_servers.%s.%s that this command will not rewrite. Edit it by hand and run this again", path, ServerName, key)
-				}
-			}
 			entryExists = true
+			if key, tableValued := tableValued(entry); tableValued {
+				return "", fmt.Errorf("%s has a table-valued mcp_servers.%s.%s that this command will not rewrite. Edit it by hand: command = %s, args = [%s]",
+					path, ServerName, key, strconv.Quote(command), strings.Join(quoteAll(args), ", "))
+			}
 			if entry["command"] == command && reflect.DeepEqual(entry["args"], toAny(args)) {
 				return actionUnchanged, nil
 			}
