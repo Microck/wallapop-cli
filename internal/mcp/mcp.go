@@ -104,11 +104,13 @@ func (s *Server) handle(ctx context.Context, line []byte) (response, bool) {
 	if err := json.Unmarshal(line, &req); err != nil {
 		return errorResponse(nil, codeParse, "invalid json"), true
 	}
-	if req.Method == "" {
-		return errorResponse(req.ID, codeInvalidRequest, "missing method"), true
-	}
+	// No id means a notification, and a notification is never answered, not
+	// even a malformed one.
 	if len(req.ID) == 0 {
 		return response{}, false
+	}
+	if req.Method == "" {
+		return errorResponse(req.ID, codeInvalidRequest, "missing method"), true
 	}
 
 	switch req.Method {

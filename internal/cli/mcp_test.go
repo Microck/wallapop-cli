@@ -178,8 +178,10 @@ func TestMCPHandshakeListsOnlyTheToolsThatMirrorReadCommands(t *testing.T) {
 		t.Errorf("tools capability missing: %v", caps)
 	}
 
-	// A notification takes no reply, so the next response must be the ping's.
+	// A notification takes no reply, malformed or not, so the next response
+	// must be the ping's.
 	s.write(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
+	s.write(map[string]any{"jsonrpc": "2.0"})
 	s.result("ping", nil)
 
 	got := s.toolNames()
