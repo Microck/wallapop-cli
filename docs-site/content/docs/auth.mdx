@@ -68,8 +68,7 @@ single login lasts roughly a month of regular use rather than a day.
 
 ```bash
 wallapop auth status          # is the session still good
-wallapop auth status --check  # exit non-zero if not, for scripts
-wallapop auth refresh         # force a refresh now
+wallapop auth refresh         # exit 3 if the session is no longer valid, for scripts
 ```
 
 ## Profiles

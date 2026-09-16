@@ -21,7 +21,7 @@ script can read stdout and check `$?` independently.
 ## Using them
 
 ```bash
-if ! wallapop auth status --check; then
+if ! wallapop auth refresh; then
   echo "session expired" >&2
   exit 1
 fi

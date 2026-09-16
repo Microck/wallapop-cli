@@ -7,9 +7,9 @@ A watch is a saved query the CLI re-runs on demand and diffs against what it saw
 What comes out is events, not results: only what changed since the previous check.
 
 ```bash
-wallapop watch add search "vinilos" --max-price 20 --distance 30
-wallapop watch add item 8j38qg58w8z9
-wallapop watch add seller npj9yx8o406e
+wallapop watch add search "vinilos" --max-price 20 --distance 30 --name vinilos
+wallapop watch add item 8j38qg58w8z9 --name couch
+wallapop watch add seller npj9yx8o406e --name fran
 wallapop watch check --all
 ```
 
@@ -37,10 +37,10 @@ Event types are `item.new`, `item.price_changed`, `item.reserved`, `item.unreser
 }
 ```
 
-Every event is delivered at least once. State is committed after sinks run, so a check that
-crashes halfway can re-emit what it already delivered; deduplicate on the event fields if
-that matters for your sink.
-
+Event delivery to sinks is best-effort: a sink that fails is logged and the check still
+commits, so the event is not retried. What is guaranteed is the diff pipeline: state is
+committed after delivery is attempted, so a check that crashes before committing re-runs
+and re-reports what it saw; deduplicate on the event fields if that matters for your sink.
 ```bash
 wallapop watch events iphone --since 24h
 ```
