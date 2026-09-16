@@ -2,3 +2,6 @@ bin/
 dist/
 *.test
 .tmp-*
+
+# Scratch worktrees used by parallel agents
+.claude/worktrees/
