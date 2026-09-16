@@ -56,9 +56,20 @@ func (c *Client) Item(ctx context.Context, ref string) (Item, error) {
 		}
 		return Item{}, err
 	}
-	page.Description = firstNonEmpty(page.Description, detail.Description)
+	// The page is a rendered snapshot and can lag, so the writable fields come
+	// from the detail endpoint, the API of record. `item edit` depends on it:
+	// it resends the fields it is not changing, and a stale title read back
+	// from the page would revert the listing.
+	page.Title = firstNonEmpty(detail.Title, page.Title)
+	page.Description = firstNonEmpty(detail.Description, page.Description)
+	page.Condition = firstNonEmpty(detail.Condition, page.Condition)
+	if detail.Price > 0 {
+		page.Price = detail.Price
+		page.Currency = firstNonEmpty(detail.Currency, page.Currency)
+	}
+	// Category is the exception: the page carries the whole taxonomy path,
+	// detail only its root, and editLeafID needs the path.
 	page.Category = firstNonEmpty(page.Category, detail.Category)
-	page.Condition = firstNonEmpty(page.Condition, detail.Condition)
 	// Only the detail endpoint exposes the category attribute table, and
 	// `item edit` has to resend it or the write clears it.
 	page.Attributes = detail.Attributes

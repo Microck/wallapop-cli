@@ -1154,6 +1154,21 @@ func TestItemEditKeepsCategoryAttrs(t *testing.T) {
 	}
 }
 
+// An edit resends the fields it is not changing, so those must come from the
+// detail endpoint: a stale rendered page would revert the listing's title.
+func TestItemEditDoesNotRevertToAStalePageTitle(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(fakewallapop.Item{
+		Hash: "hasheeeddddq", Title: "Fresh", PageTitle: "Stale",
+		Price: 10, Seller: fakewallapop.UserHash,
+	})
+	h.must("", "item", "edit", it.Hash, "--price", "50")
+	if got := h.fake.Items[it.Hash].Title; got != "Fresh" {
+		t.Fatalf("title after a price-only edit = %q, want Fresh", got)
+	}
+}
+
 func TestItemEditForeignIsRefused(t *testing.T) {
 	h := newHarness(t)
 	h.login()

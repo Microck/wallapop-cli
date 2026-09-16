@@ -236,6 +236,11 @@ func (c *Client) EditItem(ctx context.Context, hash, ownerHash string, in EditIn
 		current.Title, current.Description, current.Condition = title, description, condition
 		current.Price = price
 		current.Attributes = attrs
+		if len(in.Images) > 0 {
+			// The replacement landed, so the old URLs are gone. Reporting
+			// them would be worse than reporting none.
+			current.Images = nil
+		}
 		return current, nil
 	}
 	return it, nil
