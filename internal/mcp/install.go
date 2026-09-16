@@ -186,8 +186,9 @@ func installTOML(path, command string, args []string) (string, error) {
 	return actionUpdated, writeFile(path, []byte(body[:loc[0]]+block+kept+body[end:]), 0o600)
 }
 
-// ownedKey matches the two assignments this CLI writes.
-var ownedKey = regexp.MustCompile(`^\s*(?:command|args|"command"|"args")\s*=`)
+// ownedKey matches the two assignments this CLI writes, in each of the
+// spellings TOML allows for a bare key.
+var ownedKey = regexp.MustCompile(`^\s*(?:command|args|"command"|"args"|'command'|'args')\s*=`)
 
 // stripOwnedKeys drops the command and args assignments from one table's body,
 // a multi-line array value included, and returns what is left untouched.
@@ -199,17 +200,23 @@ func stripOwnedKeys(body string) string {
 			kept = append(kept, lines[i])
 			continue
 		}
-		// An array value may run over several lines; skip until it closes.
-		for depth := brackets(lines[i]); depth > 0 && i+1 < len(lines); {
-			i++
-			depth += brackets(lines[i])
-		}
+		i = assignmentEnd(lines, i)
 	}
 	return strings.Join(kept, "\n")
 }
 
-func brackets(line string) int {
-	return strings.Count(line, "[") - strings.Count(line, "]")
+// assignmentEnd returns the index of the last line of the assignment starting
+// at start. A value may run over several lines, and a bracket inside a string
+// or a comment means nothing, so the TOML parser decides where it ends rather
+// than a character count: the first prefix that parses is the whole value.
+func assignmentEnd(lines []string, start int) int {
+	for end := start; end < len(lines); end++ {
+		var parsed map[string]any
+		if toml.Unmarshal([]byte(strings.Join(lines[start:end+1], "\n")), &parsed) == nil {
+			return end
+		}
+	}
+	return start
 }
 
 func tomlBlock(command string, args []string) string {

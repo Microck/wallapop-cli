@@ -74,7 +74,9 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			// Report the cancellation: the CLI turns it into exit 130, the
+			// interrupt code the spec promises.
+			return ctx.Err()
 		case raw, ok := <-lines:
 			if !ok {
 				return <-scanErr

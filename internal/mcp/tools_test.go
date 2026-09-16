@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -22,11 +23,32 @@ func TestServeReturnsWhenTheContextIsCancelledOnIdleStdin(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("Serve returned %v", err)
+		// The cancellation is reported, not swallowed: the CLI turns it into
+		// exit 130.
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Serve returned %v, want context.Canceled", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve stayed blocked on stdin after the context was cancelled")
+	}
+}
+
+// stripOwnedKeys decides what survives an update of a codex table, so the
+// spellings TOML allows are checked here rather than through one install per
+// case. Dropping a key it should keep, or keeping one it should drop, both
+// leave the file unparseable for codex.
+func TestStripOwnedKeysLeavesEverythingElseAlone(t *testing.T) {
+	cases := []struct{ name, body, want string }{
+		{"quoted keys", "\"command\" = \"old\"\n'args' = [\"mcp\"]\nenabled = true\n", "enabled = true\n"},
+		{"multi-line array", "args = [\n  \"mcp\",\n  \"--profile\", \"work\",\n]\nenabled = true\n", "enabled = true\n"},
+		{"bracket inside a string", "command = \"/opt/we[ird/wallapop\"\nstartup_timeout_sec = 30\n", "startup_timeout_sec = 30\n"},
+		{"comment after the value", "args = [\"mcp\"] # set by the installer\nenabled = true\n", "enabled = true\n"},
+		{"nothing owned", "enabled = true\n# a note\n", "enabled = true\n# a note\n"},
+	}
+	for _, tc := range cases {
+		if got := stripOwnedKeys(tc.body); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
