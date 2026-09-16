@@ -48,7 +48,10 @@ type Item struct {
 	Reserved   bool
 	Sold       bool
 	Removed    bool // page 404s, API detail 404s
-	Modified   time.Time
+	// PageMissing models the window after a create where the API detail
+	// answers but the rendered page has not propagated yet.
+	PageMissing bool
+	Modified    time.Time
 }
 
 type Conversation struct {
@@ -102,9 +105,12 @@ type Server struct {
 	MintEmpty     bool // /api/auth/session answers {} (invalid session)
 	MalformedItem bool // /api/v3/items/{hash} answers non-JSON
 	CreateCalls   int
-	Uploads       map[string]int // pictures received per upload id
-	WebhookStatus int            // status for POST /hook (0 = 200)
-	Hooks         []json.RawMessage
+	// NewItemPageLags makes a created listing's rendered page 404 while its
+	// API detail already answers, the propagation window Wallapop really has.
+	NewItemPageLags bool
+	Uploads         map[string]int // pictures received per upload id
+	WebhookStatus   int            // status for POST /hook (0 = 200)
+	Hooks           []json.RawMessage
 }
 
 func New() *Server {
@@ -587,7 +593,7 @@ func (s *Server) itemPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.mu.Unlock()
-	if it == nil || it.Removed {
+	if it == nil || it.Removed || it.PageMissing {
 		w.WriteHeader(404)
 		fmt.Fprint(w, "<html>gone</html>")
 		return
@@ -882,7 +888,7 @@ func (s *Server) createItem(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.CreateCalls++
 	hash := "c" + strings.Repeat("0", 11-len(strconv.Itoa(s.CreateCalls))) + strconv.Itoa(s.CreateCalls)
-	it := &Item{Hash: hash, Title: title, Description: desc, Price: price, Condition: cond, Images: images, Seller: UserHash, Modified: time.Now()}
+	it := &Item{Hash: hash, Title: title, Description: desc, Price: price, Condition: cond, Images: images, Seller: UserHash, Modified: time.Now(), PageMissing: s.NewItemPageLags}
 	if it.Slug == "" {
 		it.Slug = strings.ToLower(strings.ReplaceAll(title, " ", "-")) + "-1301645280"
 	}

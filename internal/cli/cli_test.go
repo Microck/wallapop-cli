@@ -1077,6 +1077,28 @@ func TestItemCreateRejectsUnknownAttr(t *testing.T) {
 // or `--attr title=` would silently beat `--title`.
 // Half a coordinate pair would publish the listing at a real latitude and a
 // zero longitude, so it is refused before anything is sent.
+// A listing published seconds ago whose page has not propagated is fresh,
+// not expired: the page 404 that means "hidden" for an old listing means
+// "not there yet" for this one.
+func TestItemCreateIsNotExpiredWhileThePageLags(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.NewItemPageLags = true
+	img := filepath.Join(h.home, "a.png")
+	testPNG(t, img)
+	r := h.must("", "item", "create",
+		"--title", "T", "--description", "D", "--price", "5",
+		"--category", "17001", "--condition", "good", "--image", img)
+	var got struct {
+		Hash    string
+		Expired bool
+	}
+	decode(t, r.stdout, &got)
+	if got.Hash == "" || got.Expired {
+		t.Fatalf("fresh listing reported as %+v", got)
+	}
+}
+
 func TestItemCreateRejectsHalfACoordinatePair(t *testing.T) {
 	h := newHarness(t)
 	h.login()

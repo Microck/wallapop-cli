@@ -135,6 +135,10 @@ func (c *Client) CreateItem(ctx context.Context, in CreateInput) (Item, error) {
 		}
 		return in.published(out.ID), nil
 	}
+	// A page 404 makes Client.Item infer "expired", which is right for a
+	// listing Wallapop has hidden and wrong for one published seconds ago:
+	// there the page simply has not propagated yet.
+	it.Expired = false
 	return it, nil
 }
 
