@@ -3,7 +3,9 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -105,6 +107,11 @@ func installJSON(path, command string, args []string) (string, error) {
 		if err := dec.Decode(&doc); err != nil {
 			return "", fmt.Errorf("%s is not valid json: %w", path, err)
 		}
+		// Decode stops after the first value; anything following it would be
+		// rewritten away, so refuse the file rather than eat half of it.
+		if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("%s is not valid json: data after the document", path)
+		}
 		// A document of literal `null` decodes to a nil map.
 		if doc == nil {
 			doc = map[string]any{}
@@ -155,7 +162,14 @@ func installTOML(path, command string, args []string) (string, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return "", err
 	}
+	// The rewrite works line by line, so a file written on Windows is handled
+	// with plain newlines and converted back on the way out; every line in it
+	// had CRLF to begin with, so the file stays consistent.
 	body := string(raw)
+	crlf := strings.Contains(body, "\r\n")
+	if crlf {
+		body = strings.ReplaceAll(body, "\r\n", "\n")
+	}
 	entryExists := false
 	if strings.TrimSpace(body) != "" {
 		var doc map[string]any
@@ -182,20 +196,26 @@ func installTOML(path, command string, args []string) (string, error) {
 		return "", fmt.Errorf("%s already has an mcp_servers.%s entry in a spelling this command will not rewrite. Edit it by hand: command = %s, args = [%s]",
 			path, ServerName, strconv.Quote(command), strings.Join(quoteAll(args), ", "))
 	}
+	action, out := actionAdded, ""
 	if loc == nil {
 		joined := strings.TrimRight(body, "\n")
 		if joined != "" {
 			joined += "\n\n"
 		}
-		return actionAdded, writeFile(path, []byte(joined+block), 0o600)
+		out = joined + block
+	} else {
+		// Rewrite from the table header to the next top-level header. Only the
+		// command and args lines are this CLI's: codex keeps its own per-server
+		// settings (startup_timeout_sec, enabled, tool filters) in the same
+		// table, and they stay, comments included.
+		end := tableEnd(body, loc[0], loc[1])
+		kept := strings.TrimLeft(stripOwnedKeys(body[loc[1]:end]), "\n")
+		action, out = actionUpdated, body[:loc[0]]+block+kept+body[end:]
 	}
-	// Rewrite from the table header to the next top-level header. Only the
-	// command and args lines are this CLI's: codex keeps its own per-server
-	// settings (startup_timeout_sec, enabled, tool filters) in the same table,
-	// and they stay, comments included.
-	end := tableEnd(body, loc[0], loc[1])
-	kept := strings.TrimLeft(stripOwnedKeys(body[loc[1]:end]), "\n")
-	return actionUpdated, writeFile(path, []byte(body[:loc[0]]+block+kept+body[end:]), 0o600)
+	if crlf {
+		out = strings.ReplaceAll(out, "\n", "\r\n")
+	}
+	return action, writeFile(path, []byte(out), 0o600)
 }
 
 // tableEnd returns the offset where the table starting at start (whose header

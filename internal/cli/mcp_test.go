@@ -580,6 +580,43 @@ func TestMCPInstallFollowsASymlinkedConfig(t *testing.T) {
 	}
 }
 
+func TestMCPInstallUpdatesACodexConfigWithWindowsLineEndings(t *testing.T) {
+	h := newHarness(t)
+	codex := filepath.Join(h.home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(codex), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "[mcp_servers.wallapop]\r\ncommand = \"old\"\r\nargs = [\"mcp\"]\r\nenabled = true\r\n"
+	if err := os.WriteFile(codex, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ Action string }
+	decode(t, h.must("", "mcp", "install", "codex").stdout, &c)
+	if c.Action != "updated" {
+		t.Fatalf("action %q, want updated", c.Action)
+	}
+	after, _ := os.ReadFile(codex)
+	if strings.Contains(string(after), `command = "old"`) || !strings.Contains(string(after), "enabled = true") {
+		t.Fatalf("crlf config not updated in place:\n%q", after)
+	}
+}
+
+func TestMCPInstallRefusesJSONWithDataAfterTheDocument(t *testing.T) {
+	h := newHarness(t)
+	cursor := filepath.Join(h.home, ".cursor", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(cursor), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Rewriting this file would drop the second document silently.
+	if err := os.WriteFile(cursor, []byte("{\"mcpServers\":{}}\n{\"another\":1}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := h.run("", "mcp", "install", "cursor")
+	if r.code == 0 || !strings.Contains(r.stderr, "not valid json") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+}
+
 func TestMCPInstallRefusesATomlEntryItCannotRewrite(t *testing.T) {
 	h := newHarness(t)
 	codex := filepath.Join(h.home, ".codex", "config.toml")
