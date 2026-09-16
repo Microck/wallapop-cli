@@ -287,6 +287,18 @@ command = ["~/bin/on-wallapop-event"]
 
 - `sink list`, `sink test NAME` (sends a synthetic Event).
 
+Configure an exec sink entirely through the CLI with a TOML array of strings:
+
+```sh
+wallapop config set sinks.script.type exec
+wallapop config set sinks.script.command '["/home/me/bin/on-wallapop-event", "--verbose"]'
+wallapop config get sinks.script.command
+wallapop sink test script
+```
+
+Quote the array for the shell. Invalid arrays or non-string elements return exit 2
+and leave the previous config unchanged.
+
 ### config / doctor / skills / completion
 
 - `config path | list | get KEY | set KEY VALUE` on `config.toml`.

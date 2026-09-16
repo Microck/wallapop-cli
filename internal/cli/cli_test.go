@@ -741,14 +741,11 @@ func TestSinksReceiveEventsAndFailuresDoNotBlockCommit(t *testing.T) {
 	h.must("", "config", "set", "sinks.script.type", "exec")
 	h.must("", "config", "set", "sinks.dead.type", "webhook")
 	h.must("", "config", "set", "sinks.dead.url", h.fake.URL+"/nowhere")
-	// command is a list; set it through the file since `config set` writes scalars.
-	cfgPath := filepath.Join(h.home, "config", "wallapop-cli", "config.toml")
-	raw, _ := os.ReadFile(cfgPath)
-	raw = append(raw, []byte("\n[sinks.script]\ntype = \"exec\"\ncommand = [\""+script+"\"]\n")...)
-	raw = []byte(strings.Replace(string(raw), "[sinks.script]\ntype = 'exec'\n", "", 1))
-	if err := os.WriteFile(cfgPath, raw, 0o644); err != nil {
+	command, err := json.Marshal([]string{script})
+	if err != nil {
 		t.Fatal(err)
 	}
+	h.must("", "config", "set", "sinks.script.command", string(command))
 	h.must("", "sink", "test", "script")
 
 	h.fake.AddItem(bike("hashssssssss", 10))
@@ -871,6 +868,41 @@ func TestConfigSetRejectsUnknownKeysAndTypesValues(t *testing.T) {
 	r = h.must("", "config", "list")
 	if !strings.Contains(r.stdout, `"interval": "10m"`) {
 		t.Fatalf("config list:\n%s", r.stdout)
+	}
+}
+
+func TestConfigSetSlice(t *testing.T) {
+	h := newHarness(t)
+	key := "sinks.script.command"
+	value := `["/home/me/bin/on-event", "argument with spaces", "comma,value"]`
+	h.must("", "config", "set", key, value)
+	var got []string
+	decode(t, h.must("", "config", "get", key).stdout, &got)
+	want, _ := json.Marshal([]string{"/home/me/bin/on-event", "argument with spaces", "comma,value"})
+	actual, _ := json.Marshal(got)
+	if !bytes.Equal(actual, want) {
+		t.Fatalf("command round-trip: got %s, want %s", actual, want)
+	}
+	configPath := filepath.Join(h.home, "config", "wallapop-cli", "config.toml")
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{`"not an array"`, `["unterminated"`, `[1]`, `["ok", false]`, "[]\nother = 1"} {
+		r := h.run("", "config", "set", key, invalid)
+		if r.code != 2 || !strings.Contains(r.stderr+r.stdout, "array of strings") {
+			t.Fatalf("%q: expected array usage error, got %d: %s %s", invalid, r.code, r.stdout, r.stderr)
+		}
+		after, err := os.ReadFile(configPath)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("invalid value %q changed config: %v", invalid, err)
+		}
+	}
+	h.must("", "config", "set", "sinks.script.template", "[literal]")
+	var literal string
+	decode(t, h.must("", "config", "get", "sinks.script.template").stdout, &literal)
+	if literal != "[literal]" {
+		t.Fatalf("string parsed as an array: %q", literal)
 	}
 }
 
