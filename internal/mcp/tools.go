@@ -260,9 +260,15 @@ func dict(desc string) property {
 // so a mistyped argument names itself instead of being silently dropped.
 func (s schema) validate(in map[string]any) error {
 	var unknown []string
-	for k := range in {
+	for k, v := range in {
 		if _, ok := s.Properties[k]; !ok {
 			unknown = append(unknown, k)
+			continue
+		}
+		// An explicit null is a mistake, not an omission: passing it for a
+		// required argument would otherwise reach the CLI as a missing one.
+		if v == nil {
+			return fmt.Errorf("argument %q must not be null; leave it out instead", k)
 		}
 	}
 	if len(unknown) > 0 {

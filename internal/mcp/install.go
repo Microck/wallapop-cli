@@ -184,13 +184,24 @@ func installTOML(path, command string, args []string) (string, error) {
 	// command and args lines are this CLI's: codex keeps its own per-server
 	// settings (startup_timeout_sec, enabled, tool filters) in the same table,
 	// and they stay, comments included.
-	tail := body[loc[1]:]
-	end := len(body)
-	if next := tomlNextTable.FindStringIndex(tail); next != nil {
-		end = loc[1] + next[0]
-	}
+	end := tableEnd(body, loc[0], loc[1])
 	kept := strings.TrimLeft(stripOwnedKeys(body[loc[1]:end]), "\n")
 	return actionUpdated, writeFile(path, []byte(body[:loc[0]]+block+kept+body[end:]), 0o600)
+}
+
+// tableEnd returns the offset where the table starting at start (whose header
+// ends at afterHeader) ends. A line opening with `[` is only a header if what
+// comes before it is a complete table, so the parser decides: a `[` inside a
+// multi-line string is left where it is.
+func tableEnd(body string, start, afterHeader int) int {
+	for _, m := range tomlNextTable.FindAllStringIndex(body[afterHeader:], -1) {
+		end := afterHeader + m[0]
+		var parsed map[string]any
+		if toml.Unmarshal([]byte(body[start:end]), &parsed) == nil {
+			return end
+		}
+	}
+	return len(body)
 }
 
 // ownedKey matches the two assignments this CLI writes, in each of the
@@ -240,6 +251,17 @@ func tomlBlock(command string, args []string) string {
 func writeFile(path string, content []byte, mode os.FileMode) error {
 	if target, err := filepath.EvalSymlinks(path); err == nil {
 		path = target
+	} else if link, err := os.Readlink(path); err == nil {
+		// A link whose target does not exist yet still says where the file
+		// belongs; replacing the link with a regular file would break the
+		// dotfile manager that made it.
+		if !filepath.IsAbs(link) {
+			link = filepath.Join(filepath.Dir(path), link)
+		}
+		path = link
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
 	}
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()

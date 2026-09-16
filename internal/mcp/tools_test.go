@@ -52,6 +52,20 @@ func TestStripOwnedKeysLeavesEverythingElseAlone(t *testing.T) {
 	}
 }
 
+// tableEnd has to tell a header from a `[` that only looks like one, which is
+// why it asks the parser rather than the regex alone.
+func TestTableEndStopsAtRealHeaders(t *testing.T) {
+	body := "[mcp_servers.wallapop]\nargs = [\"\"\"\n[profile]\n\"\"\"]\nenabled = true\n\n[mcp_servers.other]\ncommand = \"other\"\n"
+	loc := tomlTable.FindStringIndex(body)
+	if loc == nil {
+		t.Fatal("the owned header did not match")
+	}
+	end := tableEnd(body, loc[0], loc[1])
+	if rest := body[end:]; rest != "[mcp_servers.other]\ncommand = \"other\"\n" {
+		t.Fatalf("the table ended at the wrong place, rest was %q", rest)
+	}
+}
+
 // The server itself is tested through the stdio transport in internal/cli.
 // What is left here is the argv mapping of the chat tools: they are written
 // but gated (see chatToolsEnabled), so the transport tests cannot reach them

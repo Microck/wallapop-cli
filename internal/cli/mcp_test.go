@@ -338,6 +338,10 @@ func TestMCPRejectsArgumentsTheSchemaDoesNotAllow(t *testing.T) {
 	if msg := s.callToolError("search", map[string]any{"limit": 1.5}); !strings.Contains(msg, "whole number") {
 		t.Errorf("fractional integer: %q", msg)
 	}
+	// An explicit null is a mistake, not an omission.
+	if msg := s.callToolError("item_show", map[string]any{"item": nil}); !strings.Contains(msg, "must not be null") {
+		t.Errorf("null argument: %q", msg)
+	}
 }
 
 func TestMCPServerActsAsTheProfileItWasStartedWith(t *testing.T) {
@@ -533,6 +537,20 @@ func TestMCPInstallFollowsASymlinkedConfig(t *testing.T) {
 	raw, _ := os.ReadFile(real)
 	if !strings.Contains(string(raw), `"wallapop"`) {
 		t.Fatalf("the symlink target was not updated: %s", raw)
+	}
+
+	// A link whose target does not exist yet is still where the file belongs.
+	dangling := filepath.Join(h.home, ".claude.json")
+	wanted := filepath.Join(h.home, "dotfiles", "claude.json")
+	if err := os.Symlink(wanted, dangling); err != nil {
+		t.Fatal(err)
+	}
+	h.must("", "mcp", "install", "claude-code")
+	if fi, err := os.Lstat(dangling); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("install replaced the dangling symlink: %v", fi.Mode())
+	}
+	if raw, err := os.ReadFile(wanted); err != nil || !strings.Contains(string(raw), `"wallapop"`) {
+		t.Fatalf("the dangling link's target was not written: %v %s", err, raw)
 	}
 }
 
