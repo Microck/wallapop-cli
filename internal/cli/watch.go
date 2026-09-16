@@ -876,13 +876,23 @@ func (a *App) serviceInstall(iv time.Duration) error {
 		return a.printSchtasks(schtasksCreate(a.serviceUnitName(), exe, args, iv),
 			"scheduled install is not automated on Windows; run the command above in cmd.exe")
 	}
+	logFile := a.serviceLogFile()
+	// A scheduler shares no working directory with the install command, so
+	// every path written into the unit has to be absolute already. These come
+	// from $HOME, and a relative $HOME makes all of them relative: systemd
+	// ignores a relative StandardOutput= and never looks where the units
+	// landed. Refuse rather than install something that quietly does nothing.
+	for _, p := range append([]string{logFile}, u.files...) {
+		if !filepath.IsAbs(p) {
+			return output.Usagef("%s is not an absolute path, so the scheduler could not use it. Set HOME to an absolute path and install again", p)
+		}
+	}
 	if err := os.MkdirAll(a.Paths.StateDir, 0o700); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(u.files[0]), 0o755); err != nil {
 		return err
 	}
-	logFile := a.serviceLogFile()
 	view := serviceView{Platform: u.platform, Unit: u.name, Files: u.files, Log: logFile}
 	switch u.platform {
 	case "systemd":

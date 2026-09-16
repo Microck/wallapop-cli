@@ -10,9 +10,12 @@ import (
 	"encoding/xml"
 	"io"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Microck/wallapop-cli/internal/config"
 )
 
 var checkArgs = []string{"watch", "check", "--all", "--profile", "default", "--format", "jsonl"}
@@ -103,6 +106,22 @@ func TestServiceEnvCarriesHome(t *testing.T) {
 		}
 	}
 	t.Fatal("HOME must be pinned into the unit")
+}
+
+// A relative $HOME makes every derived path relative, and systemd ignores a
+// relative StandardOutput= while looking for units somewhere else entirely.
+// Installing is refused instead of writing a unit that does nothing.
+func TestServiceInstallRefusesRelativePaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no scheduler integration on windows")
+	}
+	t.Setenv("HOME", "relative-home")
+	t.Setenv("XDG_STATE_HOME", "")
+	app := &App{Profile: "default", Paths: config.Paths{StateDir: "relative-state"}}
+	err := app.serviceInstall(time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Fatalf("install should refuse a relative path, got %v", err)
+	}
 }
 
 // scanPlist walks the document the way a parser does, failing on anything

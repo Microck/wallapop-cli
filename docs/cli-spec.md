@@ -203,7 +203,10 @@ Watches, Checks, Events and Sinks are defined in `CONTEXT.md`.
   install time, because a scheduler starts a job with a bare environment and the timer would
   otherwise check a different, empty state database and report nothing. Path overrides are
   made absolute first, since the scheduler runs the job from its own working directory.
-  `WALLAPOP_SESSION_TOKEN` is never written: unit files are world-readable. `uninstall` fails if the scheduler cannot be stopped. On
+  `WALLAPOP_SESSION_TOKEN` is never written: unit files are world-readable. Install refuses
+  outright when a path that would go into the unit is relative, which happens when `HOME`
+  itself is relative: systemd ignores a relative `StandardOutput=` and would not look where
+  the units landed. `uninstall` fails if the scheduler cannot be stopped. On
   Linux, install also runs `loginctl enable-linger`, without which a user timer stops at
   logout and does not start at boot. `status` says `not installed` when the unit files are
   missing, otherwise what the scheduler reports: `active`/`inactive`/`failed` on systemd
