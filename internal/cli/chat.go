@@ -358,6 +358,11 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 					if in.Conversation != conv.Hash || in.FromSelf {
 						return
 					}
+					// The open-time receipt only covered what was already
+					// there. Acknowledge this one too, the way opening the
+					// conversation does, or the sender watches "received" for
+					// the life of the session.
+					_ = ch.MarkSeen(ctx, in.Channel, in.TimeToken)
 					if jsonl {
 						_ = a.Printer.Print(in.Message)
 						return

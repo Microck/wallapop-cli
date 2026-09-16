@@ -170,7 +170,25 @@ publish, was exercised live against the owner's test account on 2026-09-14.
   reuse it instead of posting.
 - `chat open CONV` line-mode REPL: prints history, then long-polls PubNub subscribe on
   `inbox.<me>` and prints Messages whose `conversation_hash` matches, while reading lines from
-  stdin to send. `/quit` or Ctrl-D exits. No TUI.
+  stdin to send. `/quit` or Ctrl-D exits. No TUI. Messages arriving during the session are
+  marked seen as they land, the way opening the Conversation marks what was already there.
+
+  The inbox delivery is a forwarded copy, recorded live 2026-09-16 between the owner's two
+  accounts. Its envelope carries `u.original_time_token` and `u.original_channel`, which are
+  the Message's identity on its own Conversation channel, and the envelope's own `p.t` is a
+  few milliseconds later. The REST Message list and the `seen`/`received` actions both key off
+  the original, so that is what the CLI stores and what a receipt is posted against; using the
+  inbox copy's timetoken addresses a Message that exists nowhere else.
+
+  The same channel also carries message actions: `e: 3`, `source: "actions"`, no `u`, a `d.data`
+  holding `type` (`seen` or `received`), `messageTimetoken` and a JSON `value`. These are
+  receipts, not Messages, and are skipped. The account's own Messages are echoed back here too,
+  flagged by `from_user_hash`, and `chat open` drops them since it already printed what it sent.
+
+  The PubNub Access Manager token's real TTL is 60 minutes (`ttl: 60` in its CBOR body). The CLI
+  keeps a conservative 10-minute local guess and refreshes ahead of it, so a long session rotates
+  the token roughly six times per real lifetime. Verified live 2026-09-16: a session open for 18
+  minutes refreshed at 11 minutes and kept receiving afterwards.
 - `chat archive CONV [--undo]`: `PUT /api/v3/instant-messaging/conversations/archive`
   `{conversation_ids:[hash]}` (bundle), `unarchive` for `--undo`. 409 counts as success.
 
@@ -374,8 +392,9 @@ wallapop chat open 8f1c2
 
 ## 12. Open items carried into implementation
 
-- PubNub subscribe (live receive in `chat open`) is tested against the fake server only; a
-  second account is needed to exercise it end to end.
+- PubNub subscribe (live receive in `chat open`) was verified end to end on 2026-09-16 with a
+  second account: receive, receipts and token refresh across a long session. The fake now serves
+  the recorded envelopes rather than an invented shape.
 - Authenticated writes work with `Authorization` + `X-DeviceOS: 0` alone; no extra device
   headers were needed.
 - Legacy XMPP transport exists behind a feature flag on the web; the CLI implements PubNub only.

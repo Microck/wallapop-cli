@@ -98,10 +98,21 @@ func (ch *Chat) MarkRead(ctx context.Context, conv Conversation) error {
 	if last == nil || conv.Channel == "" {
 		return nil
 	}
+	return ch.MarkSeen(ctx, conv.Channel, last.TimeToken)
+}
+
+// MarkSeen signals "seen" on one message. Live messages need this as well as
+// the conversation-level MarkRead: a session left open receives messages the
+// open-time receipt could not have covered, and without it the sender is left
+// looking at "received" for as long as the session lasts.
+func (ch *Chat) MarkSeen(ctx context.Context, channel, timeToken string) error {
+	if channel == "" || timeToken == "" {
+		return nil
+	}
 	if err := ch.refreshToken(ctx); err != nil {
 		return err
 	}
-	path := fmt.Sprintf("/v1/message-actions/%s/channel/%s/message/%s", pubNubSubscribeKey, url.PathEscape(conv.Channel), last.TimeToken)
+	path := fmt.Sprintf("/v1/message-actions/%s/channel/%s/message/%s", pubNubSubscribeKey, url.PathEscape(channel), timeToken)
 	_, err := ch.client.do(ctx, request{method: http.MethodPost, base: ch.client.PubNubBase, path: path, query: ch.baseQuery(),
 		body: map[string]string{"type": "seen", "value": "{}"}, acceptStatus: []int{http.StatusConflict}}, nil)
 	return pubnubError(err)
@@ -113,6 +124,10 @@ type Incoming struct {
 	Message
 	FromUser string
 	ToUser   string
+	// Channel is the conversation channel the message was published on,
+	// which is where a read receipt for it has to go. The inbox channel it
+	// arrived on is a forwarding copy and marking that one does nothing.
+	Channel string
 }
 
 // Subscribe long-polls the account's inbox channel and calls fn for each text
@@ -173,22 +188,34 @@ func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 				To     string `json:"to_user_hash"`
 				Conv   string `json:"conversation_hash"`
 				Status string `json:"status"`
+				// Recorded live 2026-09-16: the inbox copy carries the
+				// message's identity on its own conversation channel. Every
+				// other part of Wallapop, the REST message list and the read
+				// receipts included, keys off these and not off the inbox
+				// envelope's own timetoken.
+				OriginalTimeToken string `json:"original_time_token"`
+				OriginalChannel   string `json:"original_channel"`
 			}
 			_ = json.Unmarshal(m.D, &d)
 			_ = json.Unmarshal(m.U, &u)
 			if u.Type != "text" && u.Type != "server-message" {
 				continue
 			}
+			// The inbox envelope's timetoken is when Wallapop forwarded the
+			// copy, a few milliseconds after the message was published. The
+			// original is the one that identifies the message everywhere else.
+			timeToken := firstNonEmpty(u.OriginalTimeToken, m.P.T)
 			at := time.Now()
-			if len(m.P.T) > 7 {
-				if ns, err := parseTimetoken(m.P.T); err == nil {
+			if len(timeToken) > 7 {
+				if ns, err := parseTimetoken(timeToken); err == nil {
 					at = ns
 				}
 			}
 			fn(Incoming{
-				Message:  Message{ID: d.ID, FromSelf: u.From == ch.UserHash, Text: d.Payload.Text, At: at, Type: u.Type, TimeToken: m.P.T, Conversation: u.Conv},
+				Message:  Message{ID: d.ID, FromSelf: u.From == ch.UserHash, Text: d.Payload.Text, At: at, Type: u.Type, TimeToken: timeToken, Conversation: u.Conv},
 				FromUser: u.From,
 				ToUser:   u.To,
+				Channel:  u.OriginalChannel,
 			})
 		}
 	}
