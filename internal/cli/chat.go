@@ -405,8 +405,13 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 			// the ctx cancel above.
 			defer func() {
 				cancel()
-				<-subErr
+				// The budget starts before joining the subscriber, not after.
+				// A receipt refreshing the token holds ch.mu on a context ctx
+				// cannot cancel, and the subscriber can be blocked behind it,
+				// so waiting first would put that whole request ahead of the
+				// deadline meant to bound it.
 				stop := time.AfterFunc(5*time.Second, stopReceipts)
+				<-subErr
 				receiptsDone.Wait()
 				stop.Stop()
 			}()
