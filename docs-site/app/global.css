@@ -1,0 +1,54 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+@source '../node_modules/fumadocs-ui/dist/**/*.js';
+
+/*
+ * Wallapop's palette is one accent on black and white: #13C1AC, #000, #FFF.
+ * Light mode keeps the accent readable on white by darkening it, since the
+ * brand teal on white fails contrast for body-sized text.
+ */
+:root {
+  --wallapop-teal: #13c1ac;
+  --wallapop-teal-ink: #0b7d6f;
+
+  --color-fd-primary: var(--wallapop-teal-ink);
+  --color-fd-ring: var(--wallapop-teal-ink);
+  --color-fd-accent-foreground: var(--wallapop-teal-ink);
+}
+
+.dark {
+  /* True black ground, white primary text, teal for anything interactive. */
+  --color-fd-background: #000000;
+  --color-fd-foreground: #ffffff;
+  --color-fd-card: #000000;
+  --color-fd-popover: #0a0a0a;
+  --color-fd-muted: #0d0d0d;
+  --color-fd-muted-foreground: #8a8a8a;
+  --color-fd-border: #1f1f1f;
+  --color-fd-accent: #141414;
+  --color-fd-accent-foreground: var(--wallapop-teal);
+  --color-fd-primary: var(--wallapop-teal);
+  --color-fd-primary-foreground: #000000;
+  --color-fd-ring: var(--wallapop-teal);
+  --color-fd-secondary: #0d0d0d;
+}
+
+/* Code blocks share the page ground rather than floating on their own grey. */
+.dark figure[data-rehype-pretty-code-figure],
+.dark pre {
+  background-color: #060606 !important;
+}
+
+/*
+ * Motion: short, physical, and dropped entirely when the reader asks for less.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  a,
+  button {
+    transition:
+      color 150ms cubic-bezier(0.175, 0.885, 0.32, 1.1),
+      background-color 150ms cubic-bezier(0.175, 0.885, 0.32, 1.1);
+  }
+}

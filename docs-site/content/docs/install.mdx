@@ -1,0 +1,29 @@
+---
+title: Install
+description: Get the binary on macOS, Linux or Windows.
+---
+
+<Callout type="warn" title="Not released yet">
+  `v0.1.0` has not been released. Build from source with Go until the release and its install
+  paths have been verified in [issue #2](https://github.com/Microck/wallapop-cli/issues/2).
+</Callout>
+
+## From source
+
+Install the current source with Go:
+
+```bash
+go install github.com/Microck/wallapop-cli/cmd/wallapop@latest
+wallapop --version
+```
+
+
+## Check it works
+
+```bash
+wallapop --version
+wallapop doctor
+```
+
+`doctor` checks that the config parses, the session mints, Wallapop is reachable and the chat
+token can be fetched. Run it first whenever something behaves oddly.
