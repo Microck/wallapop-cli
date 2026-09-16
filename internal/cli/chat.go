@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -357,13 +358,36 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 			// hold up this message and every one queued behind it. A receipt
 			// is worth less than the stream, so a full queue drops it.
 			receipts := make(chan wallapop.Incoming, 32)
+			var receiptsDone sync.WaitGroup
+			receiptsDone.Add(1)
+			// Quitting must not strand a receipt for a message already on
+			// screen, or the sender keeps seeing "received" for something the
+			// reader has read. Cancel, then let the worker finish what is
+			// queued; each post is bounded so /quit still returns promptly.
+			defer func() {
+				cancel()
+				receiptsDone.Wait()
+			}()
 			go func() {
+				defer receiptsDone.Done()
+				mark := func(in wallapop.Incoming) {
+					rctx, done := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+					defer done()
+					_ = ch.MarkSeen(rctx, in.Channel, in.TimeToken)
+				}
 				for {
 					select {
-					case <-ctx.Done():
-						return
 					case in := <-receipts:
-						_ = ch.MarkSeen(ctx, in.Channel, in.TimeToken)
+						mark(in)
+					case <-ctx.Done():
+						for {
+							select {
+							case in := <-receipts:
+								mark(in)
+							default:
+								return
+							}
+						}
 					}
 				}
 			}()

@@ -136,6 +136,12 @@ type Incoming struct {
 func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 	channel := "inbox." + ch.UserHash
 	timetoken, region := "0", ""
+	// PubNub holds the request up to ~280 s, which no other call wants. This
+	// is a separate client rather than a swap of the shared one: `chat open`
+	// publishes typed lines while a poll is in flight, and mutating the
+	// client under it is a data race.
+	poller := *ch.client.HTTP
+	poller.Timeout = 5 * time.Minute
 	for {
 		if err := ch.refreshToken(ctx); err != nil {
 			return err
@@ -159,14 +165,9 @@ func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 				} `json:"p"`
 			} `json:"m"`
 		}
-		// PubNub holds the request up to ~280 s; the client timeout must allow that.
-		sub := *ch.client.HTTP
-		sub.Timeout = 5 * time.Minute
-		saved := ch.client.HTTP
-		ch.client.HTTP = &sub
 		_, err := ch.client.do(ctx, request{method: http.MethodGet, base: ch.client.PubNubBase,
-			path: fmt.Sprintf("/v2/subscribe/%s/%s/0", pubNubSubscribeKey, url.PathEscape(channel)), query: q}, &out)
-		ch.client.HTTP = saved
+			path:  fmt.Sprintf("/v2/subscribe/%s/%s/0", pubNubSubscribeKey, url.PathEscape(channel)),
+			query: q, httpClient: &poller}, &out)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
