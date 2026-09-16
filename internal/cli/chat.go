@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -352,18 +353,67 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 			if conv.Unread > 0 {
 				_ = ch.MarkRead(ctx, conv)
 			}
+			// Receipts go to a worker rather than the receive loop. Subscribe
+			// calls the callback serially, so a slow message-action POST would
+			// hold up this message and every one queued behind it. A receipt
+			// is worth less than the stream, so a full queue drops it.
+			receipts := make(chan wallapop.Incoming, 32)
+			// Receipts outlive ctx: a message already on screen should stop
+			// showing as merely "received" even if the reader quits a moment
+			// later. The whole drain shares one budget, so a dead endpoint
+			// cannot turn /quit into a minute of waiting.
+			receiptCtx, stopReceipts := context.WithCancel(context.WithoutCancel(ctx))
+			defer stopReceipts()
+			var receiptsDone sync.WaitGroup
+			receiptsDone.Add(1)
+			go func() {
+				defer receiptsDone.Done()
+				// Ranging until close means the producer decides when there is
+				// nothing more to acknowledge, so shutdown cannot race a
+				// message that has been printed but not yet enqueued.
+				for in := range receipts {
+					_ = ch.MarkSeen(receiptCtx, in.Channel, in.TimeToken)
+				}
+			}()
 			subErr := make(chan error, 1)
 			go func() {
-				subErr <- ch.Subscribe(ctx, func(in wallapop.Incoming) {
+				err := ch.Subscribe(ctx, func(in wallapop.Incoming) {
 					if in.Conversation != conv.Hash || in.FromSelf {
 						return
 					}
 					if jsonl {
 						_ = a.Printer.Print(in.Message)
-						return
+					} else {
+						printMessage(a.Stdout, a.Printer.Color, in.Message, conv.WithUser.Name)
 					}
-					printMessage(a.Stdout, a.Printer.Color, in.Message, conv.WithUser.Name)
+					// The open-time receipt only covered what was already
+					// there. Acknowledge this one too, the way opening the
+					// conversation does, or the sender watches "received" for
+					// the life of the session.
+					select {
+					case receipts <- in:
+					default:
+					}
 				})
+				// Subscribe has returned, so no further sends are possible and
+				// the worker can be told the queue is final.
+				close(receipts)
+				subErr <- err
+			}()
+			// Stop the subscriber first, then let the worker finish what it
+			// was handed. Registered after the goroutines so it runs before
+			// the ctx cancel above.
+			defer func() {
+				cancel()
+				// The budget starts before joining the subscriber, not after.
+				// A receipt refreshing the token holds ch.mu on a context ctx
+				// cannot cancel, and the subscriber can be blocked behind it,
+				// so waiting first would put that whole request ahead of the
+				// deadline meant to bound it.
+				stop := time.AfterFunc(5*time.Second, stopReceipts)
+				<-subErr
+				receiptsDone.Wait()
+				stop.Stop()
 			}()
 			lines := make(chan string)
 			go func() {
@@ -376,6 +426,9 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 			for {
 				select {
 				case err := <-subErr:
+					// The drain below reads this channel too; put it back so
+					// shutdown does not block on an already-consumed value.
+					subErr <- err
 					if ctx.Err() != nil {
 						return nil
 					}

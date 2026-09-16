@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -717,9 +718,16 @@ func (u *serviceUnit) state() (state, lastRun string) {
 }
 
 // lingerEnabled reports whether the user manager survives logout, which a
-// user timer needs to run unattended and after a reboot.
+// user timer needs to run unattended and after a reboot. The user comes from
+// the passwd database rather than $USER, which a scheduled or su'd process may
+// not have: an empty name would make loginctl fail and every status line claim
+// linger is off.
 func lingerEnabled() bool {
-	out, err := exec.Command("loginctl", "show-user", "--value", "-p", "Linger", os.Getenv("USER")).Output()
+	u, err := user.Current()
+	if err != nil {
+		return false
+	}
+	out, err := exec.Command("loginctl", "show-user", "--value", "-p", "Linger", u.Username).Output()
 	return err == nil && strings.TrimSpace(string(out)) == "yes"
 }
 
@@ -754,6 +762,120 @@ func (a *App) serviceCommandLine() (string, []string, error) {
 	return exe, args, nil
 }
 
+// These are the variables that decide where the CLI reads and writes and
+// which backend it talks to. systemd and launchd
+// start a job with a bare environment, so anyone whose shell points the CLI
+// elsewhere would get a timer reading a different, empty state database from
+// the one they installed from, checking nothing and reporting nothing, with no
+// error anywhere. HOME is in the list because it is where the paths come from
+// when the XDG variables are unset, which is the common case.
+// WALLAPOP_SESSION_TOKEN is deliberately absent: it is a secret, and a unit
+// file is world-readable.
+var (
+	serviceEnvXDGKeys = []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"}
+	serviceEnvURLKeys = []string{"WALLAPOP_API_BASE_URL", "WALLAPOP_WEB_BASE_URL", "WALLAPOP_PUBNUB_BASE_URL"}
+)
+
+// serviceEnv freezes the current values of those variables into the unit, so
+// the scheduled run resolves the same paths as the install did. Each group has
+// its own rule, because each is read differently:
+//
+//   - HOME goes in as it is. Install refuses a relative one before this runs.
+//   - An XDG variable goes in only when it is absolute. The spec calls a
+//     relative one invalid and adrg/xdg ignores it, falling back to the HOME
+//     default, so pinning it would turn an override the install ignored into
+//     one the timer obeys: the empty-database bug again, from the other side.
+//   - WALLAPOP_CONFIG is read raw, so a relative one does take effect here and
+//     must be resolved: the scheduler runs the job from its own directory.
+func serviceEnv() [][2]string {
+	var env [][2]string
+	if home := os.Getenv("HOME"); home != "" {
+		env = append(env, [2]string{"HOME", home})
+	}
+	for _, k := range serviceEnvXDGKeys {
+		if v := os.Getenv(k); filepath.IsAbs(v) {
+			env = append(env, [2]string{k, v})
+		}
+	}
+	if v := os.Getenv("WALLAPOP_CONFIG"); v != "" {
+		if abs, err := filepath.Abs(v); err == nil {
+			v = abs
+		}
+		env = append(env, [2]string{"WALLAPOP_CONFIG", v})
+	}
+	for _, k := range serviceEnvURLKeys {
+		if v := os.Getenv(k); v != "" {
+			env = append(env, [2]string{k, v})
+		}
+	}
+	return env
+}
+
+// systemdUnits renders the service and timer bodies for one profile.
+//
+// OnBootSec makes the first run happen shortly after boot (and right away on
+// install, since boot is long past); OnUnitActiveSec keeps the cadence from
+// each run's end. Persistent= is for OnCalendar timers only.
+//
+// ExecStart is word-split, so the executable is quoted: a home directory with
+// a space in it would otherwise produce a unit that fails on every trigger.
+// The append: paths take the rest of the line and need no quoting, but every
+// value still has its % doubled against specifier expansion.
+func systemdUnits(profile, exe string, args []string, logFile string, iv time.Duration, env [][2]string) (service, timer string) {
+	var envLines strings.Builder
+	for _, kv := range env {
+		envLines.WriteString("Environment=" + systemdQuote(kv[0]+"="+kv[1]) + "\n")
+	}
+	log := systemdLiteral(logFile)
+	service = fmt.Sprintf("[Unit]\nDescription=wallapop-cli watch checks (%s)\n\n[Service]\nType=oneshot\n%sExecStart=%s %s\nStandardOutput=append:%s\nStandardError=append:%s\n",
+		profile, envLines.String(), systemdQuote(exe), systemdLiteral(strings.Join(args, " ")), log, log)
+	timer = fmt.Sprintf("[Unit]\nDescription=wallapop-cli watch timer (%s)\n\n[Timer]\nOnBootSec=2m\nOnUnitActiveSec=%s\n\n[Install]\nWantedBy=timers.target\n",
+		profile, formatSystemd(iv))
+	return service, timer
+}
+
+// launchdPlist renders the agent. Every value is XML-escaped: a path or URL
+// carrying & or < would otherwise produce a plist launchd refuses to parse,
+// and an agent that fails to parse simply never runs. StartInterval counts
+// whole seconds from each run; RunAtLoad makes the first one happen at load
+// rather than an interval later, which is also how the agent comes back after
+// a reboot, since launchd loads ~/Library/LaunchAgents at login.
+func launchdPlist(label, exe string, args []string, logFile string, iv time.Duration, env [][2]string) string {
+	var progArgs strings.Builder
+	for _, s := range append([]string{exe}, args...) {
+		progArgs.WriteString("    <string>" + xmlEscape(s) + "</string>\n")
+	}
+	var envDict strings.Builder
+	if len(env) > 0 {
+		envDict.WriteString("  <key>EnvironmentVariables</key><dict>\n")
+		for _, kv := range env {
+			envDict.WriteString("    <key>" + xmlEscape(kv[0]) + "</key><string>" + xmlEscape(kv[1]) + "</string>\n")
+		}
+		envDict.WriteString("  </dict>\n")
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>%s</string>
+  <key>ProgramArguments</key><array>
+%s  </array>
+%s  <key>StartInterval</key><integer>%d</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>%s</string>
+  <key>StandardErrorPath</key><string>%s</string>
+</dict></plist>
+`, xmlEscape(label), progArgs.String(), envDict.String(), int(iv.Seconds()), xmlEscape(logFile), xmlEscape(logFile))
+}
+
+// schtasksCreate is the command a Windows user runs by hand. schtasks counts
+// whole minutes and rejects 0, so the interval rounds up to at least 1. The
+// inner \" quotes keep a task command whose path has spaces in one argument,
+// which "C:\Program Files\..." needs.
+func schtasksCreate(taskName, exe string, args []string, iv time.Duration) string {
+	return fmt.Sprintf(`schtasks /Create /SC MINUTE /MO %d /TN "%s" /TR "\"%s\" %s"`,
+		max(1, int(math.Ceil(iv.Minutes()))), taskName, exe, strings.Join(args, " "))
+}
+
 func (a *App) serviceInstall(iv time.Duration) error {
 	exe, args, err := a.serviceCommandLine()
 	if err != nil {
@@ -761,9 +883,19 @@ func (a *App) serviceInstall(iv time.Duration) error {
 	}
 	u := a.serviceUnit()
 	if u == nil {
-		// schtasks counts whole minutes and rejects 0, so intervals round up to at least 1.
-		cmdline := fmt.Sprintf(`schtasks /Create /SC MINUTE /MO %d /TN "%s" /TR "\"%s\" %s"`, max(1, int(math.Ceil(iv.Minutes()))), a.serviceUnitName(), exe, strings.Join(args, " "))
-		return a.printSchtasks(cmdline, "scheduled install is not automated on Windows; run the command above in cmd.exe")
+		return a.printSchtasks(schtasksCreate(a.serviceUnitName(), exe, args, iv),
+			"scheduled install is not automated on Windows; run the command above in cmd.exe")
+	}
+	logFile := a.serviceLogFile()
+	// A scheduler shares no working directory with the install command, so
+	// every path written into the unit has to be absolute already. These come
+	// from $HOME, and a relative $HOME makes all of them relative: systemd
+	// ignores a relative StandardOutput= and never looks where the units
+	// landed. Refuse rather than install something that quietly does nothing.
+	for _, p := range append([]string{logFile}, u.files...) {
+		if !filepath.IsAbs(p) {
+			return output.Usagef("%s is not an absolute path, so the scheduler could not use it. Set HOME to an absolute path and install again", p)
+		}
 	}
 	if err := os.MkdirAll(a.Paths.StateDir, 0o700); err != nil {
 		return err
@@ -771,16 +903,10 @@ func (a *App) serviceInstall(iv time.Duration) error {
 	if err := os.MkdirAll(filepath.Dir(u.files[0]), 0o755); err != nil {
 		return err
 	}
-	logFile := a.serviceLogFile()
 	view := serviceView{Platform: u.platform, Unit: u.name, Files: u.files, Log: logFile}
 	switch u.platform {
 	case "systemd":
-		// OnBootSec makes the first run happen shortly after boot (and right
-		// away on install, since boot is long past); OnUnitActiveSec keeps the
-		// cadence from each run's end. Persistent= is for OnCalendar timers only.
-		service := fmt.Sprintf("[Unit]\nDescription=wallapop-cli watch checks (%s)\n\n[Service]\nType=oneshot\nExecStart=%s %s\nStandardOutput=append:%s\nStandardError=append:%s\n",
-			a.Profile, exe, strings.Join(args, " "), logFile, logFile)
-		timer := fmt.Sprintf("[Unit]\nDescription=wallapop-cli watch timer (%s)\n\n[Timer]\nOnBootSec=2m\nOnUnitActiveSec=%s\n\n[Install]\nWantedBy=timers.target\n", a.Profile, formatSystemd(iv))
+		service, timer := systemdUnits(a.Profile, exe, args, logFile, iv, serviceEnv())
 		if err := os.WriteFile(u.files[0], []byte(service), 0o644); err != nil {
 			return err
 		}
@@ -802,23 +928,7 @@ func (a *App) serviceInstall(iv time.Duration) error {
 		}
 		view.State = "enabled"
 	case "launchd":
-		var progArgs strings.Builder
-		for _, s := range append([]string{exe}, args...) {
-			progArgs.WriteString("    <string>" + s + "</string>\n")
-		}
-		plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>%s</string>
-  <key>ProgramArguments</key><array>
-%s  </array>
-  <key>StartInterval</key><integer>%d</integer>
-  <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>%s</string>
-  <key>StandardErrorPath</key><string>%s</string>
-</dict></plist>
-`, u.name, progArgs.String(), int(iv.Seconds()), logFile, logFile)
-		if err := os.WriteFile(u.files[0], []byte(plist), 0o644); err != nil {
+		if err := os.WriteFile(u.files[0], []byte(launchdPlist(u.name, exe, args, logFile, iv, serviceEnv())), 0o644); err != nil {
 			return err
 		}
 		_ = exec.Command("launchctl", "unload", u.files[0]).Run()
@@ -828,6 +938,27 @@ func (a *App) serviceInstall(iv time.Duration) error {
 		view.State = "loaded"
 	}
 	return a.Printer.Print(view)
+}
+
+// systemdLiteral escapes a value so systemd reads it as the text it is. A %
+// starts a specifier expansion: an unknown one makes systemd drop the whole
+// assignment, and a known one silently substitutes something else, so a path
+// or a percent-encoded URL carrying % must double it.
+func systemdLiteral(s string) string {
+	return strings.ReplaceAll(s, "%", "%%")
+}
+
+// systemdQuote is systemdLiteral plus the double quotes the unit parser
+// understands, so a path or a value with a space also survives word splitting.
+func systemdQuote(s string) string {
+	return `"` + systemdLiteral(strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)) + `"`
+}
+
+// xmlEscape makes a string safe as plist text. encoding/xml's escaper turns
+// newlines into entities, which is right but noisy; the five predefined
+// entities are all a plist needs.
+func xmlEscape(s string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&apos;").Replace(s)
 }
 
 func formatSystemd(d time.Duration) string {

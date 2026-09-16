@@ -763,20 +763,81 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, []any{1, "Sent", fmt.Sprint(time.Now().UnixNano() / 100)})
 }
 
-// subscribe answers one incoming message the first time, then blocks until
-// the client goes away, like the real long-poll.
+// Subscribe timetokens. The handshake answers an empty batch, the next poll
+// delivers a message action and then the text message, which is the order a
+// real session sees them.
+const (
+	subHandshakeTT = "17895562061135229"
+	subActionTT    = "17895562685014283"
+	subMessageTT   = "17895562791219143"
+)
+
+// InboxForwardTT is the timetoken of the inbox envelope that carries the text
+// message, as distinct from the message's own timetoken on its conversation
+// channel. They differ by a few milliseconds and only the original identifies
+// the message to the rest of Wallapop.
+const (
+	InboxForwardTT  = "17895562791211722"
+	InboxOriginalTT = "17895562791081225"
+	InboxChannel    = "chat." + UserHash + ".convhash0001." + OtherHash
+)
+
+// subscribe answers the recorded long-poll: an empty handshake, then a
+// message-action envelope, then the text message, then it blocks like the real
+// endpoint. The envelopes are the shapes recorded live on 2026-09-16 against
+// the owner's two accounts, with the hashes swapped for the fake's own and the
+// subscribe key left as Wallapop's, which is public.
 func (s *Server) subscribe(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("tt") == "0" {
-		writeJSON(w, 200, map[string]any{"t": map[string]any{"t": "17000000000000000", "r": 1}, "m": []any{}})
-		return
+	switch r.URL.Query().Get("tt") {
+	case "0":
+		writeJSON(w, 200, map[string]any{"t": map[string]any{"t": subHandshakeTT, "r": 41}, "m": []any{}})
+	case subHandshakeTT:
+		// A read receipt for a message this account sent. It arrives on the
+		// same inbox channel, carries no `u`, and must be ignored.
+		writeJSON(w, 200, map[string]any{
+			"t": map[string]any{"t": subActionTT, "r": 41},
+			"m": []map[string]any{{
+				"a": "38", "f": 0, "e": 3, "i": UserHash,
+				"p": map[string]any{"t": "17895562683899316", "r": 34},
+				"k": "sub-c-89405e27-d4df-4d87-aca1-d6e9118f0a0d",
+				"c": "inbox." + UserHash,
+				"d": map[string]any{
+					"data": map[string]any{
+						"actionTimetoken":  "17895562683830690",
+						"messageTimetoken": "17895562047499276",
+						"type":             "seen",
+						"value":            `{"conversationId":"convhash0001","seenAt":1789556268173}`,
+					},
+					"event": "added", "source": "actions", "version": "1.0",
+				},
+			}},
+		})
+	case subActionTT:
+		writeJSON(w, 200, map[string]any{
+			"t": map[string]any{"t": subMessageTT, "r": 41},
+			"m": []map[string]any{{
+				"a": "38", "f": 0,
+				"p": map[string]any{"t": InboxForwardTT, "r": 41},
+				"k": "sub-c-89405e27-d4df-4d87-aca1-d6e9118f0a0d",
+				"c": "inbox." + UserHash,
+				"u": map[string]any{
+					"conversation_hash":   "convhash0001",
+					"from_user_hash":      OtherHash,
+					"to_user_hash":        UserHash,
+					"type":                "text",
+					"date":                1789556279042,
+					"original_time_token": InboxOriginalTT,
+					"original_channel":    InboxChannel,
+				},
+				"d": map[string]any{
+					"id":      "in-1",
+					"payload": map[string]string{"text": "hola desde el fake"},
+				},
+			}},
+		})
+	default:
+		<-r.Context().Done()
 	}
-	if r.URL.Query().Get("tt") == "17000000000000000" {
-		d := map[string]any{"id": "in-1", "payload": map[string]string{"text": "hola desde el fake"}}
-		u := map[string]any{"type": "text", "from_user_hash": OtherHash, "to_user_hash": UserHash, "conversation_hash": "convhash0001"}
-		writeJSON(w, 200, map[string]any{"t": map[string]any{"t": "17000000000000001", "r": 1}, "m": []map[string]any{{"c": "inbox." + UserHash, "d": d, "u": u, "p": map[string]string{"t": "17000000000000001"}}}})
-		return
-	}
-	<-r.Context().Done()
 }
 
 func (s *Server) messageAction(w http.ResponseWriter, r *http.Request) {

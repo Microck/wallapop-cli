@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -66,6 +69,59 @@ func (h *harness) must(stdin string, args ...string) result {
 		h.t.Fatalf("wallapop %s: exit %d\nstdout: %s\nstderr: %s", strings.Join(args, " "), r.code, r.stdout, r.stderr)
 	}
 	return r
+}
+
+// syncBuf is a writer the test can read while the command is still writing.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// runUntil runs a streaming command, holding stdin open until stdout contains
+// want, then sending "/quit". Commands like `chat open` only produce their
+// interesting output after several long-poll round trips, so a fixed stdin
+// script races them.
+func (h *harness) runUntil(want string, args ...string) result {
+	h.t.Helper()
+	pr, pw := io.Pipe()
+	var out syncBuf
+	var errb bytes.Buffer
+	done := make(chan int, 1)
+	go func() { done <- cli.Execute("test", args, pr, &out, &errb) }()
+	deadline := time.After(10 * time.Second)
+	for !strings.Contains(out.String(), want) {
+		select {
+		case code := <-done:
+			return result{code: code, stdout: out.String(), stderr: errb.String()}
+		case <-deadline:
+			pw.Close()
+			h.t.Fatalf("timed out waiting for %q\nstdout: %s\nstderr: %s", want, out.String(), errb.String())
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	_, _ = pw.Write([]byte("/quit\n"))
+	select {
+	case code := <-done:
+		pw.Close()
+		return result{code: code, stdout: out.String(), stderr: errb.String()}
+	case <-time.After(10 * time.Second):
+		pw.Close()
+		h.t.Fatal("command did not exit on /quit")
+	}
+	return result{}
 }
 
 func (h *harness) cookieFile() string {
@@ -491,6 +547,69 @@ func TestChatOpenStreamsIncomingAndSendsTypedLines(t *testing.T) {
 	}
 }
 
+// The inbox envelope carries a message's identity on its own conversation
+// channel, and that is the identity the rest of Wallapop keys off. A live
+// message must be reported and acknowledged with the original timetoken and
+// channel, not with the inbox copy's own. Recorded live 2026-09-16.
+func TestChatOpenUsesTheOriginalTimetokenOfALiveMessage(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(bike("hashllllllll", 10))
+	h.fake.AddConversation(fakewallapop.Conversation{Hash: "convhash0001", Item: it.Hash})
+	r := h.runUntil("hola desde el fake", "chat", "open", "convhash0001", "--format", "jsonl")
+	if r.code != 0 {
+		t.Fatalf("exit %d stderr %s", r.code, r.stderr)
+	}
+	line := ""
+	for _, l := range strings.Split(strings.TrimSpace(r.stdout), "\n") {
+		if strings.Contains(l, "hola desde el fake") {
+			line = l
+		}
+	}
+	var got struct {
+		Text      string `json:"text"`
+		TimeToken string `json:"time_token"`
+	}
+	decode(t, line, &got)
+	if got.TimeToken != fakewallapop.InboxOriginalTT {
+		t.Fatalf("time_token = %q, want the original %q, not the inbox copy %q",
+			got.TimeToken, fakewallapop.InboxOriginalTT, fakewallapop.InboxForwardTT)
+	}
+	// The read receipt has to land on the conversation channel, against that
+	// same original timetoken.
+	var seen bool
+	for _, a := range h.fake.Actions {
+		path, _ := a["path"].(string)
+		if strings.Contains(path, fakewallapop.InboxOriginalTT) && strings.Contains(path, url.PathEscape(fakewallapop.InboxChannel)) {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("no seen receipt on %s/%s; actions: %v", fakewallapop.InboxChannel, fakewallapop.InboxOriginalTT, h.fake.Actions)
+	}
+}
+
+// The inbox also carries message actions, which have no `u` and are not
+// messages. They must not reach the stream.
+func TestChatOpenIgnoresMessageActions(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(bike("hashmmmmmmmm", 10))
+	h.fake.AddConversation(fakewallapop.Conversation{Hash: "convhash0001", Item: it.Hash})
+	r := h.runUntil("hola desde el fake", "chat", "open", "convhash0001", "--format", "jsonl")
+	// Without these two the assertion below passes on an empty stdout, which
+	// is exactly what a broken receive path produces.
+	if r.code != 0 {
+		t.Fatalf("exit %d stderr %s", r.code, r.stderr)
+	}
+	if !strings.Contains(r.stdout, "hola desde el fake") {
+		t.Fatalf("the message itself never arrived:\n%s", r.stdout)
+	}
+	if strings.Contains(r.stdout, "actionTimetoken") || strings.Contains(r.stdout, `"type":"seen"`) {
+		t.Fatalf("a message action leaked into the stream:\n%s", r.stdout)
+	}
+}
+
 func TestChatArchiveTreatsConflictAsSuccess(t *testing.T) {
 	h := newHarness(t)
 	h.login()
@@ -622,14 +741,11 @@ func TestSinksReceiveEventsAndFailuresDoNotBlockCommit(t *testing.T) {
 	h.must("", "config", "set", "sinks.script.type", "exec")
 	h.must("", "config", "set", "sinks.dead.type", "webhook")
 	h.must("", "config", "set", "sinks.dead.url", h.fake.URL+"/nowhere")
-	// command is a list; set it through the file since `config set` writes scalars.
-	cfgPath := filepath.Join(h.home, "config", "wallapop-cli", "config.toml")
-	raw, _ := os.ReadFile(cfgPath)
-	raw = append(raw, []byte("\n[sinks.script]\ntype = \"exec\"\ncommand = [\""+script+"\"]\n")...)
-	raw = []byte(strings.Replace(string(raw), "[sinks.script]\ntype = 'exec'\n", "", 1))
-	if err := os.WriteFile(cfgPath, raw, 0o644); err != nil {
+	command, err := json.Marshal([]string{script})
+	if err != nil {
 		t.Fatal(err)
 	}
+	h.must("", "config", "set", "sinks.script.command", string(command))
 	h.must("", "sink", "test", "script")
 
 	h.fake.AddItem(bike("hashssssssss", 10))
@@ -752,6 +868,41 @@ func TestConfigSetRejectsUnknownKeysAndTypesValues(t *testing.T) {
 	r = h.must("", "config", "list")
 	if !strings.Contains(r.stdout, `"interval": "10m"`) {
 		t.Fatalf("config list:\n%s", r.stdout)
+	}
+}
+
+func TestConfigSetSlice(t *testing.T) {
+	h := newHarness(t)
+	key := "sinks.script.command"
+	value := `["/home/me/bin/on-event", "argument with spaces", "comma,value"]`
+	h.must("", "config", "set", key, value)
+	var got []string
+	decode(t, h.must("", "config", "get", key).stdout, &got)
+	want, _ := json.Marshal([]string{"/home/me/bin/on-event", "argument with spaces", "comma,value"})
+	actual, _ := json.Marshal(got)
+	if !bytes.Equal(actual, want) {
+		t.Fatalf("command round-trip: got %s, want %s", actual, want)
+	}
+	configPath := filepath.Join(h.home, "config", "wallapop-cli", "config.toml")
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{`"not an array"`, `["unterminated"`, `[1]`, `["ok", false]`, "[]\nother = 1"} {
+		r := h.run("", "config", "set", key, invalid)
+		if r.code != 2 || !strings.Contains(r.stderr+r.stdout, "array of strings") {
+			t.Fatalf("%q: expected array usage error, got %d: %s %s", invalid, r.code, r.stdout, r.stderr)
+		}
+		after, err := os.ReadFile(configPath)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("invalid value %q changed config: %v", invalid, err)
+		}
+	}
+	h.must("", "config", "set", "sinks.script.template", "[literal]")
+	var literal string
+	decode(t, h.must("", "config", "get", "sinks.script.template").stdout, &literal)
+	if literal != "[literal]" {
+		t.Fatalf("string parsed as an array: %q", literal)
 	}
 }
 

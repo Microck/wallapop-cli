@@ -108,6 +108,10 @@ type request struct {
 	rawHeaders map[string]string
 	// acceptStatus lists non-2xx codes the caller treats as success (409 on archive).
 	acceptStatus []int
+	// httpClient overrides the shared client for this request. The PubNub
+	// long poll needs a timeout no other call wants, and `chat open` publishes
+	// on the shared client while a poll is in flight, so it cannot be swapped.
+	httpClient *http.Client
 }
 
 // do performs one API call, decodes JSON into out (may be nil) and classifies
@@ -164,7 +168,11 @@ func (c *Client) do(ctx context.Context, r request, out any) (*http.Response, er
 		return nil, err
 	}
 	c.debugf("> %s %s", r.method, c.redact(u))
-	resp, err := c.HTTP.Do(req)
+	httpClient := c.HTTP
+	if r.httpClient != nil {
+		httpClient = r.httpClient
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, c.netError(endpoint, err)
 	}
@@ -186,7 +194,7 @@ func (c *Client) do(ctx context.Context, r request, out any) (*http.Response, er
 		if err != nil {
 			return nil, err
 		}
-		resp, err = c.HTTP.Do(req)
+		resp, err = httpClient.Do(req)
 		if err != nil {
 			return nil, c.netError(endpoint, err)
 		}
