@@ -187,7 +187,7 @@ func installTOML(path, command string, args []string) (string, error) {
 	}
 
 	block := tomlBlock(command, args)
-	loc := tomlTable.FindStringIndex(body)
+	loc := findOwnedTable(body)
 	// TOML spells one table many ways (["mcp_servers"."wallapop"], an inline
 	// table, quoted keys). The parse sees them all, this rewrite only sees the
 	// plain header; appending a second table on top of one of the others would
@@ -216,6 +216,18 @@ func installTOML(path, command string, args []string) (string, error) {
 		out = strings.ReplaceAll(out, "\n", "\r\n")
 	}
 	return action, writeFile(path, []byte(out), 0o600)
+}
+
+// findOwnedTable locates this CLI's table header, or nil. A line that reads
+// like the header is only one when the text before it parses on its own: the
+// same words inside somebody's multi-line string are text.
+func findOwnedTable(body string) []int {
+	for _, m := range tomlTable.FindAllStringIndex(body, -1) {
+		if parsesTOML(body[:m[0]]) {
+			return m
+		}
+	}
+	return nil
 }
 
 // tableEnd returns the offset where the table starting at start (whose header

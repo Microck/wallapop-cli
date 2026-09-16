@@ -53,6 +53,22 @@ func TestStripOwnedKeysLeavesEverythingElseAlone(t *testing.T) {
 	}
 }
 
+// The header this CLI owns can also appear as somebody's text. Rewriting there
+// would bury the entry inside a string and leave codex without a server.
+func TestFindOwnedTableSkipsAHeaderInsideAString(t *testing.T) {
+	body := "note = \"\"\"\n[mcp_servers.wallapop]\n\"\"\"\n\n[mcp_servers.wallapop]\ncommand = \"real\"\n"
+	loc := findOwnedTable(body)
+	if loc == nil {
+		t.Fatal("the real header was not found")
+	}
+	if rest := body[loc[0]:]; !strings.HasPrefix(rest, "[mcp_servers.wallapop]\ncommand = \"real\"") {
+		t.Fatalf("matched the wrong occurrence: %q", rest)
+	}
+	if findOwnedTable("note = \"\"\"\n[mcp_servers.wallapop]\n\"\"\"\n") != nil {
+		t.Error("a header that exists only inside a string was taken as real")
+	}
+}
+
 // tableEnd has to tell a header from a `[` that only looks like one, which is
 // why it asks the parser rather than the regex alone.
 func TestTableEndStopsAtRealHeaders(t *testing.T) {
