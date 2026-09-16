@@ -280,6 +280,27 @@ func TestFilterKeysAndValuesAreValidatedAgainstWallapop(t *testing.T) {
 
 // items and users
 
+// Both reference forms must report the detail endpoint's values when the
+// rendered page lags, and a real price of zero is a price, not a missing one.
+func TestItemShowPrefersDetailOverAStalePage(t *testing.T) {
+	h := newHarness(t)
+	it := h.fake.AddItem(fakewallapop.Item{
+		Hash: "hashsssstale", Title: "Fresh", Price: 0,
+		PageTitle: "Stale", PagePrice: 300,
+	})
+	for _, ref := range []string{it.Hash, "https://es.wallapop.com/item/" + it.Slug} {
+		r := h.must("", "item", "show", ref)
+		var got struct {
+			Title string
+			Price float64
+		}
+		decode(t, r.stdout, &got)
+		if got.Title != "Fresh" || got.Price != 0 {
+			t.Fatalf("%s reported %+v, want the detail endpoint's Fresh/0", ref, got)
+		}
+	}
+}
+
 func TestItemShowByHashAndByURLAgree(t *testing.T) {
 	h := newHarness(t)
 	it := h.fake.AddItem(fakewallapop.Item{Hash: "hashbbbbbbbb", Title: "Trek Marlin", Price: 300, Reserved: true})

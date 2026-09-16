@@ -36,7 +36,21 @@ func itemSlugFromRef(ref string) (slug string, ok bool) {
 // need one because the page carries everything.
 func (c *Client) Item(ctx context.Context, ref string) (Item, error) {
 	if slug, ok := itemSlugFromRef(ref); ok {
-		return c.itemFromPage(ctx, slug)
+		page, err := c.itemFromPage(ctx, slug)
+		if err != nil {
+			return Item{}, err
+		}
+		detail, err := c.itemFromAPI(ctx, page.Hash)
+		if err != nil {
+			// The page knows the item but the API does not. Report the page
+			// rather than nothing, the way the hash path reports the detail.
+			var e *Error
+			if asError(err, &e) && e.Kind == KindNotFound {
+				return page, nil
+			}
+			return Item{}, err
+		}
+		return mergeItem(page, detail), nil
 	}
 	if !IsHash(ref) {
 		return Item{}, Usage("%q is not an item hash or item URL. Pass the 12-character hash or the full es.wallapop.com/item/... link", ref)
@@ -56,24 +70,31 @@ func (c *Client) Item(ctx context.Context, ref string) (Item, error) {
 		}
 		return Item{}, err
 	}
-	// The page is a rendered snapshot and can lag, so the writable fields come
-	// from the detail endpoint, the API of record. `item edit` depends on it:
-	// it resends the fields it is not changing, and a stale title read back
-	// from the page would revert the listing.
-	page.Title = firstNonEmpty(detail.Title, page.Title)
-	page.Description = firstNonEmpty(detail.Description, page.Description)
-	page.Condition = firstNonEmpty(detail.Condition, page.Condition)
-	if detail.Price > 0 {
-		page.Price = detail.Price
-		page.Currency = firstNonEmpty(detail.Currency, page.Currency)
-	}
+	return mergeItem(page, detail), nil
+}
+
+// mergeItem combines the two views of a listing, whichever order they were
+// fetched in. The rendered page is a snapshot and can lag, so every field a
+// write can change is taken from the detail endpoint, the API of record, even
+// when it is empty or zero: `item edit` resends the fields it is not changing,
+// and a stale value read back here would revert the listing. The page keeps
+// what it alone knows, which is the flags, counters and slug it was built
+// with.
+func mergeItem(page, detail Item) Item {
+	page.Title = detail.Title
+	page.Description = detail.Description
+	page.Condition = detail.Condition
+	page.Price = detail.Price
+	// Currency is not writable, so a stale one cannot revert anything, and
+	// falling back beats blanking the output.
+	page.Currency = firstNonEmpty(detail.Currency, page.Currency)
 	// Category is the exception: the page carries the whole taxonomy path,
 	// detail only its root, and editLeafID needs the path.
 	page.Category = firstNonEmpty(page.Category, detail.Category)
 	// Only the detail endpoint exposes the category attribute table, and
 	// `item edit` has to resend it or the write clears it.
 	page.Attributes = detail.Attributes
-	return page, nil
+	return page
 }
 
 // ResolveItemHash turns any accepted item reference into its hash.

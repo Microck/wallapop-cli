@@ -38,10 +38,11 @@ type Item struct {
 	// Attrs are the listing's category attributes beyond the common four,
 	// served under type_attributes and rewritten by edits.
 	Attrs map[string]string
-	// PageTitle, when set, is what the rendered item page still shows while
-	// the detail endpoint already serves Title. Wallapop's page is a cached
-	// snapshot and really does lag writes.
+	// PageTitle and PagePrice, when set, are what the rendered item page
+	// still shows while the detail endpoint already serves Title and Price.
+	// Wallapop's page is a cached snapshot and really does lag writes.
 	PageTitle string
+	PagePrice float64
 	Seller    string
 	Reserved  bool
 	Sold      bool
@@ -590,13 +591,16 @@ func (s *Server) itemPage(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "<html>gone</html>")
 		return
 	}
-	pageTitle := it.Title
+	pageTitle, pagePrice := it.Title, it.Price
 	if it.PageTitle != "" {
 		pageTitle = it.PageTitle
 	}
+	if it.PagePrice != 0 {
+		pagePrice = it.PagePrice
+	}
 	item := map[string]any{
 		"id": it.Hash, "userId": it.Seller, "title": map[string]any{"original": pageTitle}, "description": map[string]any{"original": s.itemDesc(it)},
-		"slug": it.Slug, "price": map[string]any{"cash": map[string]any{"amount": it.Price, "currency": "EUR"}},
+		"slug": it.Slug, "price": map[string]any{"cash": map[string]any{"amount": pagePrice, "currency": "EUR"}},
 		"flags":        map[string]bool{"reserved": it.Reserved, "sold": it.Sold, "expired": false, "onHold": false, "bumped": false, "favorited": false},
 		"modifiedDate": it.Modified.UnixMilli(), "views": 12, "favorites": 3,
 		"images":     fakeImages(it.Hash, it.Images),

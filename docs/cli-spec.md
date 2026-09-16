@@ -123,7 +123,7 @@ are rejected with a hint: the item page needs the slug, and Wallapop has no nume
 URLs resolve to the hash through the item page's `__NEXT_DATA__`; hashes combine the API
 detail with the page flags.
 
-- The item detail endpoint is the API of record: `item show` and the edit read-back take title, description, condition and price from it, and keep from the rendered page only what the page alone knows (flags, counters, slug and the full taxonomy path). The page is a cached snapshot and lags writes.
+- The item detail endpoint is the API of record: title, description, condition and price come from it, empty and zero included, and the rendered page contributes only what it alone knows (flags, counters, slug and the full taxonomy path). The page is a cached snapshot and lags writes. Both reference forms take the same merge, so a hash and its URL always report the same listing.
 - `item show ITEM` merges `GET /api/v3/items/{hash}` with the page flags (reserved, sold,
   expired, modified date, views, favorites).
 - `item open ITEM` opens the web page in the browser.
