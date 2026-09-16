@@ -1,9 +1,34 @@
 package mcp
 
 import (
+	"context"
+	"io"
 	"strings"
 	"testing"
+	"time"
 )
+
+// A harness may stop the server with a signal while stdin is still open, which
+// is what the cancelled context stands for here. The pipe is never written to,
+// so the read is blocked when the cancel lands.
+func TestServeReturnsWhenTheContextIsCancelledOnIdleStdin(t *testing.T) {
+	in, hold := io.Pipe()
+	defer hold.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := &Server{Version: "test"}
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx, in, io.Discard) }()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve returned %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve stayed blocked on stdin after the context was cancelled")
+	}
+}
 
 // The server itself is tested through the stdio transport in internal/cli.
 // What is left here is the argv mapping of the chat tools: they are written

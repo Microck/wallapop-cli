@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
+
 	"github.com/Microck/wallapop-cli/internal/cli"
 	"github.com/Microck/wallapop-cli/internal/fakewallapop"
 )
@@ -465,6 +467,42 @@ func TestMCPInstallKeepsSettingsItDoesNotOwn(t *testing.T) {
 	entry := doc.MCPServers["wallapop"]
 	if entry.Command == "old" || entry.Env["WALLAPOP_PROFILE"] != "work" || entry.Timeout != 60 {
 		t.Fatalf("install dropped settings it does not own: %s", raw)
+	}
+}
+
+func TestMCPInstallKeepsCodexServerSettings(t *testing.T) {
+	h := newHarness(t)
+	codex := filepath.Join(h.home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(codex), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// codex keeps its own per-server settings in the same table.
+	body := "[mcp_servers.wallapop]\ncommand = \"old\"\n# how long codex waits\nstartup_timeout_sec = 30\nargs = [\n  \"mcp\",\n]\nenabled = true\n\n[mcp_servers.other]\ncommand = \"other-mcp\"\n"
+	if err := os.WriteFile(codex, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.must("", "mcp", "install", "codex")
+
+	after, _ := os.ReadFile(codex)
+	for _, want := range []string{"# how long codex waits", "startup_timeout_sec = 30", "enabled = true", "[mcp_servers.other]"} {
+		if !strings.Contains(string(after), want) {
+			t.Fatalf("install dropped %q:\n%s", want, after)
+		}
+	}
+	if strings.Contains(string(after), `command = "old"`) || strings.Contains(string(after), "\"mcp\",\n") {
+		t.Fatalf("the old command or args survived:\n%s", after)
+	}
+	var doc struct {
+		MCPServers map[string]struct {
+			Command string
+			Args    []string
+		} `toml:"mcp_servers"`
+	}
+	if err := toml.Unmarshal(after, &doc); err != nil {
+		t.Fatalf("install left invalid toml: %v\n%s", err, after)
+	}
+	if doc.MCPServers["wallapop"].Command == "old" || strings.Join(doc.MCPServers["wallapop"].Args, " ") != "mcp" {
+		t.Fatalf("entry not updated: %+v", doc.MCPServers["wallapop"])
 	}
 }
 

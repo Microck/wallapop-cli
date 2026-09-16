@@ -12,6 +12,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -42,33 +43,54 @@ type Server struct {
 	Run     Runner
 }
 
-// Serve reads requests until in is exhausted. Responses go to out, one JSON
-// object per line; nothing else may be written there. Cancelling ctx stops the
-// loop at the next message boundary, so a harness that wants an immediate stop
-// closes stdin (or kills the process), as harnesses do.
+// Serve reads requests until in is exhausted or ctx is cancelled. Responses go
+// to out, one JSON object per line; nothing else may be written there. A
+// cancelled ctx returns even while stdin is open and idle, since a harness may
+// stop the server with a signal rather than by closing the pipe.
 func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	sc := bufio.NewScanner(in)
 	// Tool arguments stay small, but a pasted message body should not kill the
 	// session at the 64 KiB scanner default.
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	// Scan blocks until a line arrives, so the read lives in its own goroutine:
+	// a harness that stops the server with a signal instead of closing the pipe
+	// must not leave it stuck on an idle stdin. The goroutine ends with the
+	// process.
+	lines := make(chan []byte)
+	scanErr := make(chan error, 1)
+	go func() {
+		for sc.Scan() {
+			select {
+			case lines <- append([]byte(nil), sc.Bytes()...):
+			case <-ctx.Done():
+				return
+			}
+		}
+		scanErr <- sc.Err()
+		close(lines)
+	}()
+
 	enc := json.NewEncoder(out)
-	for sc.Scan() {
-		if err := ctx.Err(); err != nil {
+	for {
+		select {
+		case <-ctx.Done():
 			return nil
-		}
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		resp, ok := s.handle(ctx, []byte(line))
-		if !ok {
-			continue // notification: no reply
-		}
-		if err := enc.Encode(resp); err != nil {
-			return err
+		case raw, ok := <-lines:
+			if !ok {
+				return <-scanErr
+			}
+			if len(bytes.TrimSpace(raw)) == 0 {
+				continue
+			}
+			resp, answer := s.handle(ctx, raw)
+			if !answer {
+				continue // notification: no reply
+			}
+			if err := enc.Encode(resp); err != nil {
+				return err
+			}
 		}
 	}
-	return sc.Err()
 }
 
 type request struct {

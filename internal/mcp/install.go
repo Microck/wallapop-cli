@@ -173,14 +173,43 @@ func installTOML(path, command string, args []string) (string, error) {
 		}
 		return actionAdded, writeFile(path, []byte(joined+block), 0o600)
 	}
-	// Replace from the table header to the next top-level header, so the
-	// entry's own keys go and nothing after them does.
+	// Rewrite from the table header to the next top-level header. Only the
+	// command and args lines are this CLI's: codex keeps its own per-server
+	// settings (startup_timeout_sec, enabled, tool filters) in the same table,
+	// and they stay, comments included.
 	tail := body[loc[1]:]
 	end := len(body)
 	if next := tomlNextTable.FindStringIndex(tail); next != nil {
 		end = loc[1] + next[0]
 	}
-	return actionUpdated, writeFile(path, []byte(body[:loc[0]]+block+body[end:]), 0o600)
+	kept := strings.TrimLeft(stripOwnedKeys(body[loc[1]:end]), "\n")
+	return actionUpdated, writeFile(path, []byte(body[:loc[0]]+block+kept+body[end:]), 0o600)
+}
+
+// ownedKey matches the two assignments this CLI writes.
+var ownedKey = regexp.MustCompile(`^\s*(?:command|args|"command"|"args")\s*=`)
+
+// stripOwnedKeys drops the command and args assignments from one table's body,
+// a multi-line array value included, and returns what is left untouched.
+func stripOwnedKeys(body string) string {
+	lines := strings.Split(body, "\n")
+	kept := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		if !ownedKey.MatchString(lines[i]) {
+			kept = append(kept, lines[i])
+			continue
+		}
+		// An array value may run over several lines; skip until it closes.
+		for depth := brackets(lines[i]); depth > 0 && i+1 < len(lines); {
+			i++
+			depth += brackets(lines[i])
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+func brackets(line string) int {
+	return strings.Count(line, "[") - strings.Count(line, "]")
 }
 
 func tomlBlock(command string, args []string) string {
