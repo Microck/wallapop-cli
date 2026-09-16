@@ -36,7 +36,21 @@ func itemSlugFromRef(ref string) (slug string, ok bool) {
 // need one because the page carries everything.
 func (c *Client) Item(ctx context.Context, ref string) (Item, error) {
 	if slug, ok := itemSlugFromRef(ref); ok {
-		return c.itemFromPage(ctx, slug)
+		page, err := c.itemFromPage(ctx, slug)
+		if err != nil {
+			return Item{}, err
+		}
+		detail, err := c.itemFromAPI(ctx, page.Hash)
+		if err != nil {
+			// The page knows the item but the API does not. Report the page
+			// rather than nothing, the way the hash path reports the detail.
+			var e *Error
+			if asError(err, &e) && e.Kind == KindNotFound {
+				return page, nil
+			}
+			return Item{}, err
+		}
+		return mergeItem(page, detail), nil
 	}
 	if !IsHash(ref) {
 		return Item{}, Usage("%q is not an item hash or item URL. Pass the 12-character hash or the full es.wallapop.com/item/... link", ref)
@@ -56,10 +70,33 @@ func (c *Client) Item(ctx context.Context, ref string) (Item, error) {
 		}
 		return Item{}, err
 	}
-	page.Description = firstNonEmpty(page.Description, detail.Description)
+	return mergeItem(page, detail), nil
+}
+
+// mergeItem combines the two views of a listing, whichever order they were
+// fetched in. The rendered page is a snapshot and can lag, so every field a
+// write can change is taken from the detail endpoint, the API of record, even
+// when it is empty or zero: `item edit` resends the fields it is not changing,
+// and a stale value read back here would revert the listing. The page keeps
+// what it alone knows, which is the flags, counters and slug it was built
+// with.
+func mergeItem(page, detail Item) Item {
+	page.Title = detail.Title
+	page.Description = detail.Description
+	page.Condition = detail.Condition
+	page.Price = detail.Price
+	page.Images = detail.Images
+
+	// Currency is not writable, so a stale one cannot revert anything, and
+	// falling back beats blanking the output.
+	page.Currency = firstNonEmpty(detail.Currency, page.Currency)
+	// Category is the exception: the page carries the whole taxonomy path,
+	// detail only its root, and editLeafID needs the path.
 	page.Category = firstNonEmpty(page.Category, detail.Category)
-	page.Condition = firstNonEmpty(page.Condition, detail.Condition)
-	return page, nil
+	// Only the detail endpoint exposes the category attribute table, and
+	// `item edit` has to resend it or the write clears it.
+	page.Attributes = detail.Attributes
+	return page
 }
 
 // ResolveItemHash turns any accepted item reference into its hash.
@@ -100,12 +137,8 @@ type itemDetail struct {
 		PostalCode string  `json:"postal_code"`
 		Country    string  `json:"country_code"`
 	} `json:"location"`
-	TypeAttributes struct {
-		Condition struct {
-			Value string `json:"value"`
-		} `json:"condition"`
-	} `json:"type_attributes"`
-	Shipping struct {
+	TypeAttributes typeAttrs `json:"type_attributes"`
+	Shipping       struct {
 		ItemIsShippable bool `json:"item_is_shippable"`
 	} `json:"shipping"`
 	Favorited flag `json:"favorited"`
@@ -114,6 +147,35 @@ type itemDetail struct {
 		Favorites int `json:"favorites"`
 	} `json:"counters"`
 	ModifiedDate msTime `json:"modified_date"`
+}
+
+// typeAttrs decodes the category attribute table. Each entry arrives as a
+// {"value": ...} object (recorded live: condition, and on vertical listings
+// brand/model/year); entries shaped otherwise are skipped, since the item
+// write payload takes flat scalars.
+type typeAttrs map[string]any
+
+func (m *typeAttrs) UnmarshalJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	out := typeAttrs{}
+	for k, v := range raw {
+		var d struct {
+			Value any `json:"value"`
+		}
+		if err := json.Unmarshal(v, &d); err == nil && d.Value != nil {
+			out[k] = d.Value
+		}
+	}
+	*m = out
+	return nil
+}
+
+func (m typeAttrs) str(key string) string {
+	s, _ := m[key].(string)
+	return s
 }
 
 func (c *Client) itemFromAPI(ctx context.Context, hash string) (Item, error) {
@@ -132,7 +194,8 @@ func (c *Client) itemFromAPI(ctx context.Context, hash string) (Item, error) {
 		Currency:    d.Price.Cash.Currency,
 		Category:    taxonomyPath(d.Taxonomy),
 		SellerHash:  d.User.ID,
-		Condition:   d.TypeAttributes.Condition.Value,
+		Condition:   d.TypeAttributes.str("condition"),
+		Attributes:  d.TypeAttributes,
 		Shippable:   d.Shipping.ItemIsShippable,
 		Favorited:   d.Favorited.Flag,
 		Location:    Location{Lat: d.Location.Latitude, Lng: d.Location.Longitude, City: d.Location.City, PostalCode: d.Location.PostalCode, Country: d.Location.Country},

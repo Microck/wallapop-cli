@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -277,6 +279,28 @@ func TestFilterKeysAndValuesAreValidatedAgainstWallapop(t *testing.T) {
 }
 
 // items and users
+
+// Both reference forms must report the detail endpoint's values when the
+// rendered page lags, and a real price of zero is a price, not a missing one.
+func TestItemShowPrefersDetailOverAStalePage(t *testing.T) {
+	h := newHarness(t)
+	it := h.fake.AddItem(fakewallapop.Item{
+		Hash: "hashsssstale", Title: "Fresh", Price: 0, Images: 2,
+		PageTitle: "Stale", PagePrice: 300, PageImages: 5,
+	})
+	for _, ref := range []string{it.Hash, "https://es.wallapop.com/item/" + it.Slug} {
+		r := h.must("", "item", "show", ref)
+		var got struct {
+			Title  string
+			Price  float64
+			Images []string
+		}
+		decode(t, r.stdout, &got)
+		if got.Title != "Fresh" || got.Price != 0 || len(got.Images) != 2 {
+			t.Fatalf("%s reported %+v, want the detail endpoint's Fresh/0 and 2 images", ref, got)
+		}
+	}
+}
 
 func TestItemShowByHashAndByURLAgree(t *testing.T) {
 	h := newHarness(t)
@@ -955,5 +979,261 @@ func TestSellerActionsOnAnotherSellersItemFailBeforeWriting(t *testing.T) {
 		if rq.Method != "GET" {
 			t.Fatalf("no write may reach wallapop for someone else's item, saw %s %s", rq.Method, rq.Path)
 		}
+	}
+}
+
+func testPNG(t *testing.T, path string) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestItemCreatePublishesWithImages(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	img1 := filepath.Join(h.home, "a.png")
+	img2 := filepath.Join(h.home, "b.png")
+	testPNG(t, img1)
+	testPNG(t, img2)
+	r := h.must("", "item", "create",
+		"--title", "Test Bike", "--description", "A test bike", "--price", "120",
+		"--category", "17001", "--condition", "good",
+		"--image", img1, "--image", img2)
+	var created struct {
+		Hash string
+		URL  string
+	}
+	decode(t, r.stdout, &created)
+	if len(created.Hash) != 12 || created.URL == "" {
+		t.Fatalf("bad created item: %s", r.stdout)
+	}
+	if got := h.fake.CreateCalls; got != 1 {
+		t.Fatalf("CreateCalls = %d, want 1", got)
+	}
+	total := 0
+	for _, n := range h.fake.Uploads {
+		total += n
+	}
+	if total != 2 {
+		t.Fatalf("uploaded pictures = %d, want 2", total)
+	}
+	listed := h.must("", "me", "items")
+	if !strings.Contains(listed.stdout, created.Hash) {
+		t.Fatalf("created item missing from me items:\n%s", listed.stdout)
+	}
+	shown := h.must("", "item", "show", created.Hash)
+	var detail struct {
+		Title     string
+		Price     float64
+		Condition string
+	}
+	decode(t, shown.stdout, &detail)
+	if detail.Title != "Test Bike" || detail.Price != 120 || detail.Condition != "good" {
+		t.Fatalf("wrong detail: %s", shown.stdout)
+	}
+}
+
+func TestItemCreateMissingFieldsIsUsageError(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	r := h.run("", "item", "create", "--title", "Half")
+	if r.code != 2 {
+		t.Fatalf("exit %d, want 2: %s", r.code, r.stderr)
+	}
+	for _, want := range []string{"--description", "--price", "--category", "--condition", "--image"} {
+		if !strings.Contains(r.stderr, want) {
+			t.Fatalf("stderr missing %s: %s", want, r.stderr)
+		}
+	}
+	if h.fake.CreateCalls != 0 {
+		t.Fatal("create reached Wallapop despite missing fields")
+	}
+}
+
+func TestItemCreateRejectsUnknownAttr(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	img := filepath.Join(h.home, "a.png")
+	testPNG(t, img)
+	r := h.run("", "item", "create",
+		"--title", "T", "--description", "D", "--price", "5",
+		"--category", "17001", "--condition", "good",
+		"--attr", "wingspan=2", "--image", img)
+	if r.code != 2 || !strings.Contains(r.stderr, "wingspan") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	if h.fake.CreateCalls != 0 {
+		t.Fatal("create reached Wallapop despite bad attr")
+	}
+}
+
+// The common fields have typed flags; --attr must not be a second way in,
+// or `--attr title=` would silently beat `--title`.
+// Half a coordinate pair would publish the listing at a real latitude and a
+// zero longitude, so it is refused before anything is sent.
+// A listing published seconds ago whose page has not propagated is fresh,
+// not expired: the page 404 that means "hidden" for an old listing means
+// "not there yet" for this one.
+func TestItemCreateIsNotExpiredWhileThePageLags(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.NewItemPageLags = true
+	img := filepath.Join(h.home, "a.png")
+	testPNG(t, img)
+	r := h.must("", "item", "create",
+		"--title", "T", "--description", "D", "--price", "5",
+		"--category", "17001", "--condition", "good", "--image", img)
+	var got struct {
+		Hash    string
+		Expired bool
+	}
+	decode(t, r.stdout, &got)
+	if got.Hash == "" || got.Expired {
+		t.Fatalf("fresh listing reported as %+v", got)
+	}
+}
+
+func TestItemCreateRejectsHalfACoordinatePair(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	img := filepath.Join(h.home, "a.png")
+	testPNG(t, img)
+	r := h.run("", "item", "create",
+		"--title", "T", "--description", "D", "--price", "5",
+		"--category", "17001", "--condition", "good",
+		"--lat", "41.39", "--image", img)
+	if r.code != 2 || !strings.Contains(r.stderr, "--lng") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	if h.fake.CreateCalls != 0 {
+		t.Fatal("create reached Wallapop with half a coordinate pair")
+	}
+}
+
+// An image whose name carries a quote must still arrive as a readable
+// multipart part.
+func TestItemCreateAcceptsQuotedImageName(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	img := filepath.Join(h.home, `a"b.png`)
+	testPNG(t, img)
+	h.must("", "item", "create",
+		"--title", "T", "--description", "D", "--price", "5",
+		"--category", "17001", "--condition", "good", "--image", img)
+	if h.fake.CreateCalls != 1 {
+		t.Fatalf("create calls = %d, want 1", h.fake.CreateCalls)
+	}
+}
+
+func TestItemCreateRejectsCommonAttr(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	img := filepath.Join(h.home, "a.png")
+	testPNG(t, img)
+	r := h.run("", "item", "create",
+		"--title", "T", "--description", "D", "--price", "5",
+		"--category", "17001", "--condition", "good",
+		"--attr", "Price_Amount=9", "--image", img)
+	if r.code != 2 || !strings.Contains(r.stderr, "--price") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	if h.fake.CreateCalls != 0 {
+		t.Fatal("create reached Wallapop despite a common --attr key")
+	}
+}
+
+func TestItemEditChangesFields(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(fakewallapop.Item{Hash: "hasheeeddddd", Title: "Old", Description: "Old desc", Price: 10, Seller: fakewallapop.UserHash})
+	img := filepath.Join(h.home, "new.png")
+	testPNG(t, img)
+	r := h.must("", "item", "edit", it.Hash, "--title", "New", "--description", "New desc", "--price", "50", "--condition", "new", "--image", img)
+	var edited struct {
+		Title       string
+		Description string
+		Price       float64
+		Condition   string
+		Images      []string
+	}
+	decode(t, r.stdout, &edited)
+	if edited.Title != "New" || edited.Description != "New desc" || edited.Price != 50 || edited.Condition != "new" {
+		t.Fatalf("wrong edit result: %s", r.stdout)
+	}
+	if len(edited.Images) != 1 {
+		t.Fatalf("edited images = %d, want 1: %s", len(edited.Images), r.stdout)
+	}
+	shown := h.must("", "item", "show", it.Hash)
+	var detail struct {
+		Description string
+		Images      []string
+	}
+	decode(t, shown.stdout, &detail)
+	if detail.Description != "New desc" {
+		t.Fatalf("description not served back: %s", shown.stdout)
+	}
+	if len(detail.Images) != 1 {
+		t.Fatalf("shown images = %d, want 1: %s", len(detail.Images), shown.stdout)
+	}
+}
+
+// An edit resends the whole attribute set, so a title-only change must not
+// drop the listing's category attributes.
+func TestItemEditKeepsCategoryAttrs(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(fakewallapop.Item{
+		Hash: "hasheeeddddw", Title: "Old", Price: 10, Seller: fakewallapop.UserHash,
+		Attrs: map[string]string{"brand": "Volkswagen"},
+	})
+	h.must("", "item", "edit", it.Hash, "--title", "New")
+	if got := h.fake.Items[it.Hash].Attrs["brand"]; got != "Volkswagen" {
+		t.Fatalf("brand after title edit = %q, want Volkswagen", got)
+	}
+}
+
+// An edit resends the fields it is not changing, so those must come from the
+// detail endpoint: a stale rendered page would revert the listing's title.
+func TestItemEditDoesNotRevertToAStalePageTitle(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(fakewallapop.Item{
+		Hash: "hasheeeddddq", Title: "Fresh", PageTitle: "Stale",
+		Price: 10, Seller: fakewallapop.UserHash,
+	})
+	h.must("", "item", "edit", it.Hash, "--price", "50")
+	if got := h.fake.Items[it.Hash].Title; got != "Fresh" {
+		t.Fatalf("title after a price-only edit = %q, want Fresh", got)
+	}
+}
+
+func TestItemEditForeignIsRefused(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(bike("hasheeeeeeff", 20))
+	r := h.run("", "item", "edit", it.Hash, "--title", "Mine now")
+	if r.code != 2 {
+		t.Fatalf("exit %d, want 2: %s", r.code, r.stderr)
+	}
+	for _, rq := range h.fake.RequestsUnder("/api/v3/items/" + it.Hash) {
+		if rq.Method == "PUT" {
+			t.Fatal("PUT sent for another seller's item")
+		}
+	}
+}
+
+func TestItemEditNoChangesIsUsageError(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(fakewallapop.Item{Hash: "hasheeeddaaa", Title: "Mine", Price: 5, Seller: fakewallapop.UserHash})
+	r := h.run("", "item", "edit", it.Hash)
+	if r.code != 2 {
+		t.Fatalf("exit %d, want 2: %s", r.code, r.stderr)
 	}
 }
