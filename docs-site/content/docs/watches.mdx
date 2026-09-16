@@ -37,8 +37,9 @@ Event types are `item.new`, `item.price_changed`, `item.reserved`, `item.unreser
 }
 ```
 
-Every event is reported once. State lives in a local SQLite database, so a check that crashes
-halfway does not replay what it already emitted.
+Every event is delivered at least once. State is committed after sinks run, so a check that
+crashes halfway can re-emit what it already delivered; deduplicate on the event fields if
+that matters for your sink.
 
 ```bash
 wallapop watch events iphone --since 24h
