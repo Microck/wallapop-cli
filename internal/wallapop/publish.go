@@ -220,7 +220,20 @@ func (c *Client) EditItem(ctx context.Context, hash, ownerHash string, in EditIn
 	if err := c.writeItem(ctx, http.MethodPut, "/api/v3/items/"+current.Hash, UploadAccept, payload, in.Images, &out); err != nil {
 		return Item{}, ownWriteError(err)
 	}
-	return c.Item(ctx, current.Hash)
+	// The edit has landed. Like a create, failing the command because the
+	// read-back raced the API would invite a pointless retry, so fall back to
+	// the pre-edit listing with the overlay applied.
+	it, err := c.Item(ctx, current.Hash)
+	if err != nil {
+		if c.Notice != nil {
+			c.Notice("edited " + current.Hash + ", but reading it back failed: " + err.Error())
+		}
+		current.Title, current.Description, current.Condition = title, description, condition
+		current.Price = price
+		current.Attributes = attrs
+		return current, nil
+	}
+	return it, nil
 }
 
 // editLeafID recovers the listing's leaf category for the write payload.
