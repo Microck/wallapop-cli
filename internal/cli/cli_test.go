@@ -285,18 +285,19 @@ func TestFilterKeysAndValuesAreValidatedAgainstWallapop(t *testing.T) {
 func TestItemShowPrefersDetailOverAStalePage(t *testing.T) {
 	h := newHarness(t)
 	it := h.fake.AddItem(fakewallapop.Item{
-		Hash: "hashsssstale", Title: "Fresh", Price: 0,
-		PageTitle: "Stale", PagePrice: 300,
+		Hash: "hashsssstale", Title: "Fresh", Price: 0, Images: 2,
+		PageTitle: "Stale", PagePrice: 300, PageImages: 5,
 	})
 	for _, ref := range []string{it.Hash, "https://es.wallapop.com/item/" + it.Slug} {
 		r := h.must("", "item", "show", ref)
 		var got struct {
-			Title string
-			Price float64
+			Title  string
+			Price  float64
+			Images []string
 		}
 		decode(t, r.stdout, &got)
-		if got.Title != "Fresh" || got.Price != 0 {
-			t.Fatalf("%s reported %+v, want the detail endpoint's Fresh/0", ref, got)
+		if got.Title != "Fresh" || got.Price != 0 || len(got.Images) != 2 {
+			t.Fatalf("%s reported %+v, want the detail endpoint's Fresh/0 and 2 images", ref, got)
 		}
 	}
 }

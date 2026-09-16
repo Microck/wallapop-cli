@@ -85,6 +85,8 @@ func mergeItem(page, detail Item) Item {
 	page.Description = detail.Description
 	page.Condition = detail.Condition
 	page.Price = detail.Price
+	page.Images = detail.Images
+
 	// Currency is not writable, so a stale one cannot revert anything, and
 	// falling back beats blanking the output.
 	page.Currency = firstNonEmpty(detail.Currency, page.Currency)

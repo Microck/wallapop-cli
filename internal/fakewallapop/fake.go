@@ -41,13 +41,14 @@ type Item struct {
 	// PageTitle and PagePrice, when set, are what the rendered item page
 	// still shows while the detail endpoint already serves Title and Price.
 	// Wallapop's page is a cached snapshot and really does lag writes.
-	PageTitle string
-	PagePrice float64
-	Seller    string
-	Reserved  bool
-	Sold      bool
-	Removed   bool // page 404s, API detail 404s
-	Modified  time.Time
+	PageTitle  string
+	PagePrice  float64
+	PageImages int
+	Seller     string
+	Reserved   bool
+	Sold       bool
+	Removed    bool // page 404s, API detail 404s
+	Modified   time.Time
 }
 
 type Conversation struct {
@@ -591,19 +592,22 @@ func (s *Server) itemPage(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "<html>gone</html>")
 		return
 	}
-	pageTitle, pagePrice := it.Title, it.Price
+	pageTitle, pagePrice, pageImages := it.Title, it.Price, it.Images
 	if it.PageTitle != "" {
 		pageTitle = it.PageTitle
 	}
 	if it.PagePrice != 0 {
 		pagePrice = it.PagePrice
 	}
+	if it.PageImages != 0 {
+		pageImages = it.PageImages
+	}
 	item := map[string]any{
 		"id": it.Hash, "userId": it.Seller, "title": map[string]any{"original": pageTitle}, "description": map[string]any{"original": s.itemDesc(it)},
 		"slug": it.Slug, "price": map[string]any{"cash": map[string]any{"amount": pagePrice, "currency": "EUR"}},
 		"flags":        map[string]bool{"reserved": it.Reserved, "sold": it.Sold, "expired": false, "onHold": false, "bumped": false, "favorited": false},
 		"modifiedDate": it.Modified.UnixMilli(), "views": 12, "favorites": 3,
-		"images":     fakeImages(it.Hash, it.Images),
+		"images":     fakeImages(it.Hash, pageImages),
 		"location":   map[string]any{"latitude": 40.4, "longitude": -3.7, "city": "Madrid", "postalCode": "28001", "countryCode": "ES"},
 		"shipping":   map[string]bool{"isItemShippable": true},
 		"condition":  map[string]any{"value": s.itemCondition(it), "text": "Buen estado"},
