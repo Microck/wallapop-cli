@@ -113,10 +113,12 @@ func (s *mcpSession) callTool(name string, args map[string]any) (string, bool) {
 	s.t.Helper()
 	res := s.result("tools/call", map[string]any{"name": name, "arguments": args})
 	content, _ := res["content"].([]any)
-	if len(content) != 1 {
-		s.t.Fatalf("tool %s returned %d content blocks", name, len(content))
+	if len(content) == 0 {
+		s.t.Fatalf("tool %s returned no content", name)
 	}
-	block, _ := content[0].(map[string]any)
+	// A failed command answers with what it printed and then its envelope, so
+	// the last block is the one that matters either way.
+	block, _ := content[len(content)-1].(map[string]any)
 	if block["type"] != "text" {
 		s.t.Fatalf("tool %s returned a %v block", name, block["type"])
 	}
@@ -235,6 +237,20 @@ func TestMCPToolOutputIsTheSameJSONTheCommandPrints(t *testing.T) {
 	q := h.fake.RequestsTo("/api/v3/search")[0].Query
 	if q.Get("max_sale_price") != "500" || q.Get("condition") != "good" || q.Get("keywords") != "bici roja" {
 		t.Fatalf("tool arguments did not reach the query: %v", q)
+	}
+
+	// Keywords ride behind --, so one that happens to name a subcommand or
+	// start with a dash is still a search term.
+	text, isErr = s.callTool("search", map[string]any{"keywords": "filters"})
+	if isErr {
+		t.Fatalf("search for a subcommand name failed: %s", text)
+	}
+	var page struct {
+		Items []struct{ Hash string } `json:"items"`
+	}
+	decode(t, text, &page)
+	if len(page.Items) == 0 {
+		t.Fatalf("search ran the filters subcommand instead: %s", text)
 	}
 
 	it := h.fake.AddItem(bike("hashitemshow", 250))

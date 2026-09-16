@@ -175,18 +175,25 @@ func (s *Server) call(ctx context.Context, params json.RawMessage) (map[string]a
 	if err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
 	}
-	out := s.Run(ctx, argv)
-	if out.ErrorJSON != "" {
-		return textResult(out.ErrorJSON, true), nil
-	}
-	return textResult(out.Stdout, false), nil
+	return toolResult(s.Run(ctx, argv)), nil
 }
 
-func textResult(text string, isError bool) map[string]any {
-	return map[string]any{
-		"content": []any{map[string]any{"type": "text", "text": strings.TrimRight(text, "\n")}},
-		"isError": isError,
+// toolResult carries whatever the command printed before it failed. `watch
+// check` prints the events it did produce and then reports the check that
+// broke, and an agent needs both halves.
+func toolResult(out Result) map[string]any {
+	var blocks []any
+	if text := strings.TrimRight(out.Stdout, "\n"); text != "" {
+		blocks = append(blocks, map[string]any{"type": "text", "text": text})
 	}
+	if out.ErrorJSON != "" {
+		blocks = append(blocks, map[string]any{"type": "text", "text": strings.TrimRight(out.ErrorJSON, "\n")})
+		return map[string]any{"content": blocks, "isError": true}
+	}
+	if blocks == nil {
+		blocks = append(blocks, map[string]any{"type": "text", "text": ""})
+	}
+	return map[string]any{"content": blocks, "isError": false}
 }
 
 // unknownToolMessage names the withheld tools explicitly. An agent that asks

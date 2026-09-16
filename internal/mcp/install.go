@@ -117,8 +117,12 @@ func installJSON(path, command string, args []string) (string, error) {
 	return action, writeFile(path, append(out, '\n'), 0o600)
 }
 
-// tomlTable matches the table header this CLI owns, bare or quoted.
-var tomlTable = regexp.MustCompile(`(?m)^\[mcp_servers\.(?:` + ServerName + `|"` + ServerName + `")\]\s*$`)
+// tomlTable matches the table header this CLI owns, bare or quoted;
+// tomlNextTable finds where that table ends, at the next header.
+var (
+	tomlTable     = regexp.MustCompile(`(?m)^\[mcp_servers\.(?:` + ServerName + `|"` + ServerName + `")\]\s*$`)
+	tomlNextTable = regexp.MustCompile(`(?m)^\[`)
+)
 
 // installTOML edits codex's config.toml as text. A generic parse-and-remarshal
 // would drop the user's comments and reorder their file, so only the lines of
@@ -156,7 +160,7 @@ func installTOML(path, command string, args []string) (string, error) {
 	// entry's own keys go and nothing after them does.
 	tail := body[loc[1]:]
 	end := len(body)
-	if next := regexp.MustCompile(`(?m)^\[`).FindStringIndex(tail); next != nil {
+	if next := tomlNextTable.FindStringIndex(tail); next != nil {
 		end = loc[1] + next[0]
 	}
 	return actionUpdated, writeFile(path, []byte(body[:loc[0]]+block+body[end:]), 0o600)

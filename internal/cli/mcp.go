@@ -127,5 +127,7 @@ func (a *App) runCommand(ctx context.Context, argv []string) mcp.Result {
 	}
 	var envelope bytes.Buffer
 	output.PrintError(&envelope, err, output.ErrJSON, a.Version, path)
-	return mcp.Result{ErrorJSON: envelope.String()}
+	// Whatever was printed before the failure still goes back: `watch check`
+	// reports the events it produced and then the check that broke.
+	return mcp.Result{Stdout: out.String(), ErrorJSON: envelope.String()}
 }
