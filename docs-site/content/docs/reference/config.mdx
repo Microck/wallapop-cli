@@ -18,6 +18,7 @@ wallapop config set profiles.default.location.lat 41.39
 wallapop config set sinks.phone.type ntfy
 wallapop config set sinks.phone.url https://ntfy.sh
 wallapop config set sinks.phone.topic wallapop-deals
+wallapop config set sinks.script.command '["/home/me/bin/on-event", "--verbose"]'
 wallapop config get sinks.phone
 ```
 
@@ -47,7 +48,7 @@ wallapop config path
 
 ## `wallapop config set`
 
-Set one key (numbers and booleans are typed automatically)
+Set one key (exec commands use TOML string arrays)
 
 ```bash
 wallapop config set KEY VALUE
