@@ -1054,16 +1054,35 @@ func TestItemCreateRejectsUnknownAttr(t *testing.T) {
 func TestItemEditChangesFields(t *testing.T) {
 	h := newHarness(t)
 	h.login()
-	it := h.fake.AddItem(fakewallapop.Item{Hash: "hasheeeddddd", Title: "Old", Price: 10, Seller: fakewallapop.UserHash})
-	r := h.must("", "item", "edit", it.Hash, "--title", "New", "--price", "50", "--condition", "new")
+	it := h.fake.AddItem(fakewallapop.Item{Hash: "hasheeeddddd", Title: "Old", Description: "Old desc", Price: 10, Seller: fakewallapop.UserHash})
+	img := filepath.Join(h.home, "new.png")
+	testPNG(t, img)
+	r := h.must("", "item", "edit", it.Hash, "--title", "New", "--description", "New desc", "--price", "50", "--condition", "new", "--image", img)
 	var edited struct {
-		Title     string
-		Price     float64
-		Condition string
+		Title       string
+		Description string
+		Price       float64
+		Condition   string
+		Images      []string
 	}
 	decode(t, r.stdout, &edited)
-	if edited.Title != "New" || edited.Price != 50 || edited.Condition != "new" {
+	if edited.Title != "New" || edited.Description != "New desc" || edited.Price != 50 || edited.Condition != "new" {
 		t.Fatalf("wrong edit result: %s", r.stdout)
+	}
+	if len(edited.Images) != 1 {
+		t.Fatalf("edited images = %d, want 1: %s", len(edited.Images), r.stdout)
+	}
+	shown := h.must("", "item", "show", it.Hash)
+	var detail struct {
+		Description string
+		Images      []string
+	}
+	decode(t, shown.stdout, &detail)
+	if detail.Description != "New desc" {
+		t.Fatalf("description not served back: %s", shown.stdout)
+	}
+	if len(detail.Images) != 1 {
+		t.Fatalf("shown images = %d, want 1: %s", len(detail.Images), shown.stdout)
 	}
 }
 

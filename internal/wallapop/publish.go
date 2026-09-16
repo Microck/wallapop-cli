@@ -60,6 +60,9 @@ type EditInput struct {
 	Condition   *string
 	Attrs       map[string]string
 	Images      []UploadImage
+	// CategoryLeaf is the listing's leaf category when the caller already
+	// resolved one (the --attr path does). Zero means "work it out".
+	CategoryLeaf int
 }
 
 // itemPayload is the `item` JSON part. CategoryLeafID is a string on the
@@ -172,13 +175,39 @@ func (c *Client) EditItem(ctx context.Context, hash, ownerHash string, in EditIn
 	for k, v := range in.Attrs {
 		attrs[k] = v
 	}
-	payload["category_leaf_id"] = strconv.Itoa(current.CategoryID)
-	payload["location"] = map[string]any{"latitude": current.Location.Lat, "longitude": current.Location.Lng, "approximated": false}
+	payload["category_leaf_id"] = c.editLeafID(ctx, in, current)
+	// `item edit` exposes no location flag, so the listing's own coordinates
+	// go back unchanged. When the item detail carries none, the field is left
+	// out rather than resubmitted as 0,0, which would move the listing into
+	// the Atlantic.
+	if current.Location.Lat != 0 || current.Location.Lng != 0 {
+		payload["location"] = map[string]any{"latitude": current.Location.Lat, "longitude": current.Location.Lng, "approximated": false}
+	}
 	var out any
 	if err := c.writeItem(ctx, http.MethodPut, "/api/v3/items/"+current.Hash, UploadAccept, payload, in.Images, &out); err != nil {
 		return Item{}, ownWriteError(err)
 	}
 	return c.Item(ctx, current.Hash)
+}
+
+// editLeafID recovers the listing's leaf category for the write payload.
+// Item detail exposes the taxonomy path, not the leaf id, so the path is
+// matched back against the create tree (CreateCategories builds names with
+// the same separator). When nothing resolves this falls back to the id the
+// item carries, which is the root taxonomy: wrong for deep categories, but
+// the shape the write contract was recorded with.
+func (c *Client) editLeafID(ctx context.Context, in EditInput, current Item) string {
+	if in.CategoryLeaf > 0 {
+		return strconv.Itoa(in.CategoryLeaf)
+	}
+	if current.Category != "" {
+		if cats, err := c.CreateCategories(ctx); err == nil {
+			if cat, err := ResolveCreateCategory(cats, current.Category); err == nil {
+				return strconv.Itoa(cat.LeafID)
+			}
+		}
+	}
+	return strconv.Itoa(current.CategoryID)
 }
 
 // writeItem sends a multipart item write (image files plus an `item` JSON
@@ -229,20 +258,6 @@ func (c *Client) writeItem(ctx context.Context, method, path, accept string, pay
 		bodyBytes = raw
 		contentType = "application/json"
 	}
-	var rd io.Reader
-	if bodyBytes != nil {
-		rd = bytes.NewReader(bodyBytes)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.APIBase+path, rd)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", c.currentUA())
-	req.Header.Set("Accept", accept)
-	req.Header.Set("X-DeviceOS", "0")
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
 	if c.Tokens == nil {
 		return &Error{Kind: KindAuth, Endpoint: endpoint, Msg: "this command needs a logged-in profile. Run `wallapop auth login`"}
 	}
@@ -250,8 +265,31 @@ func (c *Client) writeItem(ctx context.Context, method, path, accept string, pay
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+tok)
 	c.Redact(tok)
+	// The body is buffered, so the request can be rebuilt for the CloudFront
+	// user-agent retry below.
+	build := func() (*http.Request, error) {
+		var rd io.Reader
+		if bodyBytes != nil {
+			rd = bytes.NewReader(bodyBytes)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.APIBase+path, rd)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", c.currentUA())
+		req.Header.Set("Accept", accept)
+		req.Header.Set("X-DeviceOS", "0")
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		return req, nil
+	}
+	req, err := build()
+	if err != nil {
+		return err
+	}
 	c.debugf("> %s %s (%d bytes)", method, c.redact(c.APIBase+path), len(bodyBytes))
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -263,6 +301,30 @@ func (c *Client) writeItem(ctx context.Context, method, path, accept string, pay
 		return c.netError(endpoint, err)
 	}
 	c.debugf("< %d %s (%d bytes)", resp.StatusCode, endpoint, len(raw))
+
+	// Same one-shot CloudFront fallback Client.do performs: writes go through
+	// this path instead, so without it an upload or publish dies on a 403 the
+	// rest of the client recovers from.
+	if resp.StatusCode == http.StatusForbidden && isCloudFrontBlock(raw) && !c.browserUAActive() {
+		c.setBrowserUA()
+		if c.Notice != nil {
+			c.Notice("wallapop rejected the wallapop-cli user agent; retrying with a browser user agent for this run")
+		}
+		req, err = build()
+		if err != nil {
+			return err
+		}
+		resp, err = c.HTTP.Do(req)
+		if err != nil {
+			return c.netError(endpoint, err)
+		}
+		raw, err = io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		resp.Body.Close()
+		if err != nil {
+			return c.netError(endpoint, err)
+		}
+		c.debugf("< %d %s (%d bytes, browser UA)", resp.StatusCode, endpoint, len(raw))
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return c.statusError(endpoint, resp.StatusCode, raw)
 	}

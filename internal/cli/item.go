@@ -360,6 +360,9 @@ func (a *App) itemEditCmd() *cobra.Command {
 					return err
 				}
 				in.Attrs = parsed
+				// The leaf is already resolved here; hand it over so the
+				// write does not have to recover it from the taxonomy path.
+				in.CategoryLeaf = cat.LeafID
 			}
 			if len(images) > 0 {
 				files, err := loadItemImages(images)
@@ -392,19 +395,20 @@ func (a *App) itemEditCmd() *cobra.Command {
 // keys against the category's attribute list before anything is published.
 func parseItemAttrs(pairs []string, cat wallapop.CreateCategory) (map[string]string, error) {
 	out := map[string]string{}
-	allowed := map[string]bool{"title": true, "description": true, "condition": true, "price_amount": true}
+	allowed := map[string]string{"title": "title", "description": "description", "condition": "condition", "price_amount": "price_amount"}
 	for _, a := range cat.Attrs {
-		allowed[strings.ToLower(a)] = true
+		allowed[strings.ToLower(a)] = a
 	}
 	for _, p := range pairs {
 		k, v, ok := strings.Cut(p, "=")
 		if !ok || k == "" {
 			return nil, output.Usagef("bad --attr %q. Use key=value", p)
 		}
-		if !allowed[strings.ToLower(k)] {
+		canon, ok := allowed[strings.ToLower(k)]
+		if !ok {
 			return nil, output.Usagef("unknown attribute %q for category %s. Valid: %s", k, cat.Name, strings.Join(cat.Attrs, ", "))
 		}
-		out[k] = v
+		out[canon] = v
 	}
 	return out, nil
 }

@@ -366,11 +366,22 @@ func (s *Server) savedSearches(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func fakeImages(hash string, n int) []map[string]any {
+	if n <= 0 {
+		n = 1
+	}
+	imgs := make([]map[string]any, 0, n)
+	for i := 1; i <= n; i++ {
+		imgs = append(imgs, map[string]any{"id": "img" + strconv.Itoa(i), "urls": map[string]string{"small": "s", "medium": "m", "big": "https://cdn/" + hash + "-" + strconv.Itoa(i) + ".jpg"}})
+	}
+	return imgs
+}
+
 func (s *Server) searchItemJSON(it *Item) map[string]any {
 	return map[string]any{
-		"id": it.Hash, "user_id": it.Seller, "title": it.Title, "description": "desc " + it.Title, "category_id": 17000,
+		"id": it.Hash, "user_id": it.Seller, "title": it.Title, "description": s.itemDesc(it), "category_id": 17000,
 		"price":    map[string]any{"amount": it.Price, "currency": "EUR"},
-		"images":   []map[string]any{{"id": "img1", "urls": map[string]string{"small": "s", "medium": "m", "big": "https://cdn/" + it.Hash + ".jpg"}}},
+		"images":   fakeImages(it.Hash, it.Images),
 		"reserved": map[string]bool{"flag": it.Reserved}, "favorited": map[string]bool{"flag": s.Favorites[it.Hash]},
 		"location": map[string]any{"latitude": 40.4, "longitude": -3.7, "postal_code": "28001", "city": "Madrid", "country_code": "ES"},
 		"shipping": map[string]bool{"item_is_shippable": true, "user_allows_shipping": true},
@@ -382,7 +393,7 @@ func (s *Server) searchItemJSON(it *Item) map[string]any {
 func (s *Server) userItemJSON(it *Item) map[string]any {
 	return map[string]any{
 		"id": it.Hash, "title": it.Title, "description": "desc", "slug": it.Slug, "user_id": it.Seller,
-		"images":   []map[string]any{{"id": "img1", "urls": map[string]string{"big": "https://cdn/" + it.Hash + ".jpg"}}},
+		"images":   fakeImages(it.Hash, it.Images),
 		"price":    map[string]any{"amount": it.Price, "currency": "EUR"},
 		"shipping": map[string]bool{"item_is_shippable": true},
 		"reserved": map[string]bool{"flag": it.Reserved}, "sold": map[string]bool{"flag": it.Sold},
@@ -503,10 +514,10 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, map[string]any{
-			"id": it.Hash, "title": map[string]string{"original": it.Title}, "description": map[string]string{"original": "desc " + it.Title},
+			"id": it.Hash, "title": map[string]string{"original": it.Title}, "description": map[string]string{"original": s.itemDesc(it)},
 			"taxonomy": []map[string]any{{"id": "17000", "name": "Bikes"}}, "user": map[string]any{"id": it.Seller}, "slug": it.Slug,
 			"price":           map[string]any{"cash": map[string]any{"amount": it.Price, "currency": "EUR"}},
-			"images":          []map[string]any{{"id": "img1", "urls": map[string]string{"big": "https://cdn/" + it.Hash + ".jpg"}}},
+			"images":          fakeImages(it.Hash, it.Images),
 			"location":        map[string]any{"latitude": 40.4, "longitude": -3.7, "city": "Madrid", "postal_code": "28001", "country_code": "ES"},
 			"type_attributes": map[string]any{"condition": map[string]any{"value": s.itemCondition(it)}},
 			"shipping":        map[string]bool{"item_is_shippable": true},
@@ -573,11 +584,11 @@ func (s *Server) itemPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item := map[string]any{
-		"id": it.Hash, "userId": it.Seller, "title": map[string]any{"original": it.Title}, "description": map[string]any{"original": "desc " + it.Title},
+		"id": it.Hash, "userId": it.Seller, "title": map[string]any{"original": it.Title}, "description": map[string]any{"original": s.itemDesc(it)},
 		"slug": it.Slug, "price": map[string]any{"cash": map[string]any{"amount": it.Price, "currency": "EUR"}},
 		"flags":        map[string]bool{"reserved": it.Reserved, "sold": it.Sold, "expired": false, "onHold": false, "bumped": false, "favorited": false},
 		"modifiedDate": it.Modified.UnixMilli(), "views": 12, "favorites": 3,
-		"images":     []map[string]any{{"id": "img1", "urls": map[string]string{"big": "https://cdn/" + it.Hash + ".jpg"}}},
+		"images":     fakeImages(it.Hash, it.Images),
 		"location":   map[string]any{"latitude": 40.4, "longitude": -3.7, "city": "Madrid", "postalCode": "28001", "countryCode": "ES"},
 		"shipping":   map[string]bool{"isItemShippable": true},
 		"condition":  map[string]any{"value": s.itemCondition(it), "text": "Buen estado"},
@@ -777,6 +788,15 @@ func (s *Server) categories(w http.ResponseWriter, r *http.Request) {
 		{"id": 100, "name": "Cars", "vertical_id": "cars", "attributes": map[string]any{"brand": map[string]any{"title": "brand"}}, "subcategories": []any{}},
 		{"id": 17000, "name": "Bikes", "vertical_id": "consumer_goods", "subcategories": []map[string]any{{"id": 17001, "name": "MTB", "attributes": attrs, "subcategories": []any{}}}},
 	}})
+}
+
+// itemDesc serves the stored description; pre-publish fixtures carry none,
+// so they keep the old synthetic text.
+func (s *Server) itemDesc(it *Item) string {
+	if it.Description != "" {
+		return it.Description
+	}
+	return "desc " + it.Title
 }
 
 func (s *Server) itemCondition(it *Item) string {
