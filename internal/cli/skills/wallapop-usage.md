@@ -81,6 +81,20 @@ Event shape: `{"type":"item.new|item.price_changed|item.reserved|item.unreserved
 
 Sinks are config entries: `[sinks.phone] type="ntfy" url="https://ntfy.sh" topic="deals"`, `type="webhook" url=... template="discord"`, `type="exec" command=["/path/script"]` (event JSON on stdin). `wallapop sink test phone` sends a synthetic event.
 
+## MCP
+
+`wallapop mcp` is a Model Context Protocol server on stdin/stdout. Each tool runs the command it is named after and returns that command's JSON verbatim; a command that fails comes back as a tool error whose text is the error envelope (`{code,category,retryable,message,...}`), so exit codes above still apply.
+
+```
+wallapop mcp install claude-code|codex|cursor [--profile NAME]
+```
+
+Install writes the server entry into `~/.claude.json`, `~/.codex/config.toml` or `~/.cursor/mcp.json`, leaves every other entry and comment alone, and prints `{harness,path,action,command,args}` with action `added`, `updated` or `unchanged`. The entry points at the running binary, and `--profile` is baked into it so the server keeps acting as that account.
+
+Tools: `search`, `item_show`, `user_show`, `watch_check`. Arguments are the command's flags with dashes as underscores (`max_price`, `no_mark_read`, `next_page` for `--next`); `condition` takes an array, `filter` an object.
+
+Not tools, on purpose: `item reserve`, `item sold`, `item delete`, `item create`, `item edit`. Destructive and seller actions stay with the person at the terminal; asking for them returns a refusal that says so. The chat tools (`chat_list`, `chat_show`, `chat_send`, `chat_start`) are written but withheld until live message receive is verified.
+
 ## Config
 
 `$XDG_CONFIG_HOME/wallapop-cli/config.toml`; `wallapop config set watch.interval 10m`; `wallapop config path`. Credentials live in `credentials.toml` (0600), state in `$XDG_DATA_HOME/wallapop-cli/state.db`.

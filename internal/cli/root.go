@@ -131,6 +131,7 @@ Agent usage: wallapop skills get wallapop-usage`,
 		a.searchCmd(), a.categoryCmd(), a.alertCmd(),
 		a.itemCmd(), a.userCmd(), a.meCmd(),
 		a.chatCmd(),
+		a.mcpCmd(),
 		a.watchCmd(), a.sinkCmd(),
 		a.configCmd(), a.doctorCmd(), a.skillsCmd(),
 	)
