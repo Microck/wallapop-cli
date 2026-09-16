@@ -133,6 +133,9 @@ func (s *Server) handle(ctx context.Context, line []byte) (response, bool) {
 	if len(req.ID) == 0 {
 		return response{}, false
 	}
+	if req.JSONRPC != "2.0" {
+		return errorResponse(req.ID, codeInvalidRequest, `"jsonrpc" must be "2.0"`), true
+	}
 	if req.Method == "" {
 		return errorResponse(req.ID, codeInvalidRequest, "missing method"), true
 	}

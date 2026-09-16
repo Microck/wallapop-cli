@@ -214,6 +214,15 @@ func TestMCPWithholdsSellerActionsAndChatUntilReceiveIsVerified(t *testing.T) {
 	if resp := s.request("wallapop/please", nil); resp["error"] == nil {
 		t.Errorf("unknown method should be a jsonrpc error: %v", resp)
 	}
+	// A request that does not declare JSON-RPC 2.0 runs nothing.
+	s.write(map[string]any{"id": 99, "method": "tools/call", "params": map[string]any{"name": "watch_check"}})
+	line, err := s.out.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("no answer to the versionless request: %v", err)
+	}
+	if !strings.Contains(string(line), "jsonrpc") || !strings.Contains(string(line), "-32600") {
+		t.Errorf("versionless request was not refused: %s", line)
+	}
 }
 
 func TestMCPToolOutputIsTheSameJSONTheCommandPrints(t *testing.T) {
@@ -614,6 +623,35 @@ func TestMCPInstallRefusesJSONWithDataAfterTheDocument(t *testing.T) {
 	r := h.run("", "mcp", "install", "cursor")
 	if r.code == 0 || !strings.Contains(r.stderr, "not valid json") {
 		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+}
+
+func TestMCPInstallRefusesAConfigWhereTheEntryIsNotATable(t *testing.T) {
+	h := newHarness(t)
+	cursor := filepath.Join(h.home, ".cursor", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(cursor), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cursor, []byte(`{"mcpServers":{"wallapop":"not a table"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.run("", "mcp", "install", "cursor"); r.code == 0 || !strings.Contains(r.stderr, "not a table") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+
+	codex := filepath.Join(h.home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(codex), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "mcp_servers = \"nonsense\"\n"
+	if err := os.WriteFile(codex, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.run("", "mcp", "install", "codex"); r.code == 0 || !strings.Contains(r.stderr, "not a table") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	if after, _ := os.ReadFile(codex); string(after) != body {
+		t.Fatalf("the config was written anyway:\n%s", after)
 	}
 }
 

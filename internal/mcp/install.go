@@ -117,14 +117,20 @@ func installJSON(path, command string, args []string) (string, error) {
 			doc = map[string]any{}
 		}
 	}
-	servers, _ := doc["mcpServers"].(map[string]any)
+	servers, err := table(doc, "mcpServers", path)
+	if err != nil {
+		return "", err
+	}
 	if servers == nil {
 		servers = map[string]any{}
 	}
 	// Only command and args are this CLI's to write: an entry may also carry
 	// env, timeouts or harness-specific keys the person put there, and an
 	// install must not throw them away.
-	entry, _ := servers[ServerName].(map[string]any)
+	entry, err := table(servers, ServerName, path)
+	if err != nil {
+		return "", err
+	}
 	action := actionAdded
 	if entry != nil {
 		if entry["command"] == command && reflect.DeepEqual(entry["args"], toAny(args)) {
@@ -144,6 +150,22 @@ func installJSON(path, command string, args []string) (string, error) {
 	}
 	// 0600: a harness config holds the account's other server credentials.
 	return action, writeFile(path, append(out, '\n'), 0o600)
+}
+
+// table returns the map at key, nil when the key is absent, and an error when
+// it holds anything else. A value this CLI did not write is never overwritten,
+// and writing an entry next to it would only produce a file the harness cannot
+// read.
+func table(doc map[string]any, key, path string) (map[string]any, error) {
+	v, ok := doc[key]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s has %q set to a %T, not a table of servers. Fix it by hand and run this again", path, key, v)
+	}
+	return m, nil
 }
 
 // tomlTable matches the table header this CLI owns, bare or quoted;
@@ -176,12 +198,18 @@ func installTOML(path, command string, args []string) (string, error) {
 		if err := toml.Unmarshal(raw, &doc); err != nil {
 			return "", fmt.Errorf("%s is not valid toml: %w", path, err)
 		}
-		if servers, ok := doc["mcp_servers"].(map[string]any); ok {
-			if entry, ok := servers[ServerName].(map[string]any); ok {
-				entryExists = true
-				if entry["command"] == command && reflect.DeepEqual(entry["args"], toAny(args)) {
-					return actionUnchanged, nil
-				}
+		servers, err := table(doc, "mcp_servers", path)
+		if err != nil {
+			return "", err
+		}
+		entry, err := table(servers, ServerName, path)
+		if err != nil {
+			return "", err
+		}
+		if entry != nil {
+			entryExists = true
+			if entry["command"] == command && reflect.DeepEqual(entry["args"], toAny(args)) {
+				return actionUnchanged, nil
 			}
 		}
 	}
