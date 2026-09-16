@@ -160,7 +160,6 @@ func (c *Client) Inbox(ctx context.Context, archived bool, pageSize, maxMessages
 	out := Inbox{UserHash: raw.UserHash, Unread: raw.UnreadMessages, NextFrom: raw.NextFrom}
 	for _, r := range raw.Conversations {
 		conv := c.normalizeConversation(r)
-		c.HydrateOffers(ctx, conv.Messages)
 		conv.Archived = archived
 		out.Conversations = append(out.Conversations, conv)
 	}
@@ -176,9 +175,7 @@ func (c *Client) Conversation(ctx context.Context, hash string) (Conversation, e
 	if raw.Hash == "" {
 		return Conversation{}, &Error{Kind: KindAPIChanged, Endpoint: "GET /bff/messaging/conversation/{hash}", Msg: "conversation came back without a hash"}
 	}
-	conv := c.normalizeConversation(raw)
-	c.HydrateOffers(ctx, conv.Messages)
-	return conv, nil
+	return c.normalizeConversation(raw), nil
 }
 
 // OlderMessages pages backwards from a conversation's next_from cursor.
@@ -199,7 +196,6 @@ func (c *Client) OlderMessages(ctx context.Context, hash, from string, max int) 
 	for i := len(raw.Messages) - 1; i >= 0; i-- {
 		out = append(out, raw.Messages[i].normalize())
 	}
-	c.HydrateOffers(ctx, out)
 	return out, raw.NextFrom, nil
 }
 

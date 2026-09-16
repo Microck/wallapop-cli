@@ -146,6 +146,9 @@ func (a *App) chatListCmd() *cobra.Command {
 				}
 				inbox.Conversations = kept
 			}
+			for i := range inbox.Conversations {
+				a.Client.HydrateOffers(cmd.Context(), inbox.Conversations[i].Messages)
+			}
 			return a.Printer.Print(inboxView(inbox))
 		},
 	}
@@ -231,6 +234,7 @@ func (a *App) chatShowCmd() *cobra.Command {
 					fmt.Fprintf(a.Stderr, "wallapop: could not mark as read: %v\n", err)
 				}
 			}
+			a.Client.HydrateOffers(ctx, conv.Messages)
 			return a.Printer.Print(convView(conv))
 		},
 	}
@@ -366,6 +370,7 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 			}
 			jsonl := a.Printer.Format == output.JSONL
 			if !jsonl {
+				a.Client.HydrateOffers(ctx, conv.Messages)
 				convView(conv).Pretty(a.Stdout, a.Printer.Color)
 				fmt.Fprintln(a.Stderr, output.Dim("type a message and press enter; /quit to leave", a.Printer.Color))
 			}
