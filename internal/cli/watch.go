@@ -762,8 +762,8 @@ func (a *App) serviceCommandLine() (string, []string, error) {
 	return exe, args, nil
 }
 
-// serviceEnvPathKeys and serviceEnvURLKeys are the variables that decide where
-// the CLI reads and writes and which backend it talks to. systemd and launchd
+// These are the variables that decide where the CLI reads and writes and
+// which backend it talks to. systemd and launchd
 // start a job with a bare environment, so anyone whose shell points the CLI
 // elsewhere would get a timer reading a different, empty state database from
 // the one they installed from, checking nothing and reporting nothing, with no
@@ -772,26 +772,36 @@ func (a *App) serviceCommandLine() (string, []string, error) {
 // WALLAPOP_SESSION_TOKEN is deliberately absent: it is a secret, and a unit
 // file is world-readable.
 var (
-	serviceEnvPathKeys = []string{"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "WALLAPOP_CONFIG"}
-	serviceEnvURLKeys  = []string{"WALLAPOP_API_BASE_URL", "WALLAPOP_WEB_BASE_URL", "WALLAPOP_PUBNUB_BASE_URL"}
+	serviceEnvXDGKeys = []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"}
+	serviceEnvURLKeys = []string{"WALLAPOP_API_BASE_URL", "WALLAPOP_WEB_BASE_URL", "WALLAPOP_PUBNUB_BASE_URL"}
 )
 
 // serviceEnv freezes the current values of those variables into the unit, so
-// the scheduled run resolves the same paths as the install did. Unset stays
-// unset. Paths are made absolute first: a scheduler starts the job from its
-// own working directory, where a relative override would point at something
-// else entirely.
+// the scheduled run resolves the same paths as the install did. Each group has
+// its own rule, because each is read differently:
+//
+//   - HOME goes in as it is. Install refuses a relative one before this runs.
+//   - An XDG variable goes in only when it is absolute. The spec calls a
+//     relative one invalid and adrg/xdg ignores it, falling back to the HOME
+//     default, so pinning it would turn an override the install ignored into
+//     one the timer obeys: the empty-database bug again, from the other side.
+//   - WALLAPOP_CONFIG is read raw, so a relative one does take effect here and
+//     must be resolved: the scheduler runs the job from its own directory.
 func serviceEnv() [][2]string {
 	var env [][2]string
-	for _, k := range serviceEnvPathKeys {
-		v := os.Getenv(k)
-		if v == "" {
-			continue
+	if home := os.Getenv("HOME"); home != "" {
+		env = append(env, [2]string{"HOME", home})
+	}
+	for _, k := range serviceEnvXDGKeys {
+		if v := os.Getenv(k); filepath.IsAbs(v) {
+			env = append(env, [2]string{k, v})
 		}
+	}
+	if v := os.Getenv("WALLAPOP_CONFIG"); v != "" {
 		if abs, err := filepath.Abs(v); err == nil {
 			v = abs
 		}
-		env = append(env, [2]string{k, v})
+		env = append(env, [2]string{"WALLAPOP_CONFIG", v})
 	}
 	for _, k := range serviceEnvURLKeys {
 		if v := os.Getenv(k); v != "" {

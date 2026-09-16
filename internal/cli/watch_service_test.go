@@ -76,8 +76,28 @@ func TestSystemdUnitDoublesPercentAgainstSpecifierExpansion(t *testing.T) {
 	}
 }
 
-// A scheduler runs the job from its own working directory, so a relative
-// override recorded as given would resolve somewhere else entirely.
+// A relative XDG value is invalid per the spec and adrg/xdg ignores it, so the
+// install used the HOME default. Pinning it would make the timer obey an
+// override the install did not: a different, empty state database.
+func TestServiceEnvDropsRelativeXDGOverrides(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "reldata")
+	t.Setenv("XDG_STATE_HOME", "/abs/state")
+	for _, kv := range serviceEnv() {
+		if kv[0] == "XDG_DATA_HOME" {
+			t.Fatalf("a relative XDG value must not be pinned, got %q", kv[1])
+		}
+	}
+	found := false
+	for _, kv := range serviceEnv() {
+		found = found || (kv[0] == "XDG_STATE_HOME" && kv[1] == "/abs/state")
+	}
+	if !found {
+		t.Fatal("an absolute XDG value must still be pinned")
+	}
+}
+
+// WALLAPOP_CONFIG is read raw rather than through xdg, so a relative one does
+// take effect, and the scheduler runs the job from its own directory.
 func TestServiceEnvMakesPathOverridesAbsolute(t *testing.T) {
 	t.Setenv("WALLAPOP_CONFIG", "custom/config.toml")
 	want, err := filepath.Abs("custom/config.toml")

@@ -201,8 +201,10 @@ Watches, Checks, Events and Sinks are defined in `CONTEXT.md`.
   CLI reads and writes: `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`,
   `WALLAPOP_CONFIG` and the three base-URL overrides go into the unit as they stood at
   install time, because a scheduler starts a job with a bare environment and the timer would
-  otherwise check a different, empty state database and report nothing. Path overrides are
-  made absolute first, since the scheduler runs the job from its own working directory.
+  otherwise check a different, empty state database and report nothing. A relative XDG value
+  is left out, since the CLI ignores it too and falls back to the `HOME` default; a relative
+  `WALLAPOP_CONFIG` is made absolute, since that one is read raw and the scheduler runs the
+  job from its own working directory.
   `WALLAPOP_SESSION_TOKEN` is never written: unit files are world-readable. Install refuses
   outright when a path that would go into the unit is relative, which happens when `HOME`
   itself is relative: systemd ignores a relative `StandardOutput=` and would not look where
