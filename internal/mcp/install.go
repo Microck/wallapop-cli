@@ -99,15 +99,22 @@ func installJSON(path, command string, args []string) (string, error) {
 	if servers == nil {
 		servers = map[string]any{}
 	}
-	want := map[string]any{"command": command, "args": toAny(args)}
-	if reflect.DeepEqual(servers[ServerName], want) {
-		return actionUnchanged, nil
-	}
+	// Only command and args are this CLI's to write: an entry may also carry
+	// env, timeouts or harness-specific keys the person put there, and an
+	// install must not throw them away.
+	entry, _ := servers[ServerName].(map[string]any)
 	action := actionAdded
-	if _, ok := servers[ServerName]; ok {
+	if entry != nil {
+		if entry["command"] == command && reflect.DeepEqual(entry["args"], toAny(args)) {
+			return actionUnchanged, nil
+		}
 		action = actionUpdated
+	} else {
+		entry = map[string]any{}
 	}
-	servers[ServerName] = want
+	entry["command"] = command
+	entry["args"] = toAny(args)
+	servers[ServerName] = entry
 	doc["mcpServers"] = servers
 	out, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -133,6 +140,7 @@ func installTOML(path, command string, args []string) (string, error) {
 		return "", err
 	}
 	body := string(raw)
+	entryExists := false
 	if strings.TrimSpace(body) != "" {
 		var doc map[string]any
 		if err := toml.Unmarshal(raw, &doc); err != nil {
@@ -140,6 +148,7 @@ func installTOML(path, command string, args []string) (string, error) {
 		}
 		if servers, ok := doc["mcp_servers"].(map[string]any); ok {
 			if entry, ok := servers[ServerName].(map[string]any); ok {
+				entryExists = true
 				if entry["command"] == command && reflect.DeepEqual(entry["args"], toAny(args)) {
 					return actionUnchanged, nil
 				}
@@ -149,6 +158,14 @@ func installTOML(path, command string, args []string) (string, error) {
 
 	block := tomlBlock(command, args)
 	loc := tomlTable.FindStringIndex(body)
+	// TOML spells one table many ways (["mcp_servers"."wallapop"], an inline
+	// table, quoted keys). The parse sees them all, this rewrite only sees the
+	// plain header; appending a second table on top of one of the others would
+	// leave the file invalid, so say so instead.
+	if loc == nil && entryExists {
+		return "", fmt.Errorf("%s already has an mcp_servers.%s entry in a spelling this command will not rewrite. Edit it by hand: command = %s, args = [%s]",
+			path, ServerName, strconv.Quote(command), strings.Join(quoteAll(args), ", "))
+	}
 	if loc == nil {
 		joined := strings.TrimRight(body, "\n")
 		if joined != "" {
@@ -175,7 +192,12 @@ func tomlBlock(command string, args []string) string {
 }
 
 // writeFile replaces the file atomically, keeping the mode it already had.
+// A config kept by a dotfile manager is usually a symlink, so the target is
+// rewritten rather than replaced by a regular file.
 func writeFile(path string, content []byte, mode os.FileMode) error {
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
 	}

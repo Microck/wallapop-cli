@@ -436,6 +436,86 @@ func TestMCPInstallIsIdempotentPerHarness(t *testing.T) {
 	}
 }
 
+func TestMCPInstallKeepsSettingsItDoesNotOwn(t *testing.T) {
+	h := newHarness(t)
+	// An entry can carry env, timeouts or harness-specific keys the person put
+	// there; only command and args belong to this CLI.
+	cursor := filepath.Join(h.home, ".cursor", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(cursor), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := `{"mcpServers":{"wallapop":{"command":"old","args":["mcp"],"env":{"WALLAPOP_PROFILE":"work"},"timeout":60}}}`
+	if err := os.WriteFile(cursor, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.must("", "mcp", "install", "cursor")
+
+	var doc struct {
+		MCPServers map[string]struct {
+			Command string
+			Args    []string
+			Env     map[string]string
+			Timeout int
+		} `json:"mcpServers"`
+	}
+	raw, _ := os.ReadFile(cursor)
+	decode(t, string(raw), &doc)
+	entry := doc.MCPServers["wallapop"]
+	if entry.Command == "old" || entry.Env["WALLAPOP_PROFILE"] != "work" || entry.Timeout != 60 {
+		t.Fatalf("install dropped settings it does not own: %s", raw)
+	}
+}
+
+func TestMCPInstallFollowsASymlinkedConfig(t *testing.T) {
+	h := newHarness(t)
+	real := filepath.Join(h.home, "dotfiles", "cursor-mcp.json")
+	if err := os.MkdirAll(filepath.Dir(real), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(real, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(h.home, ".cursor", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	h.must("", "mcp", "install", "cursor")
+
+	fi, err := os.Lstat(link)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("install replaced the symlink with a file: %v", fi.Mode())
+	}
+	raw, _ := os.ReadFile(real)
+	if !strings.Contains(string(raw), `"wallapop"`) {
+		t.Fatalf("the symlink target was not updated: %s", raw)
+	}
+}
+
+func TestMCPInstallRefusesATomlEntryItCannotRewrite(t *testing.T) {
+	h := newHarness(t)
+	codex := filepath.Join(h.home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(codex), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A spelling the parser accepts but the rewrite does not recognise:
+	// appending a second table would leave the file invalid.
+	body := "[\"mcp_servers\".\"wallapop\"]\ncommand = \"old\"\nargs = [\"mcp\"]\n"
+	if err := os.WriteFile(codex, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := h.run("", "mcp", "install", "codex")
+	if r.code == 0 || !strings.Contains(r.stderr, "by hand") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	after, _ := os.ReadFile(codex)
+	if string(after) != body {
+		t.Fatalf("the config was touched anyway:\n%s", after)
+	}
+}
+
 func TestMCPInstallRejectsAnUnknownHarness(t *testing.T) {
 	h := newHarness(t)
 	r := h.run("", "mcp", "install", "emacs")
