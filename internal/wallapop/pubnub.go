@@ -143,9 +143,9 @@ type Incoming struct {
 	Channel string
 }
 
-// Subscribe long-polls the account's inbox channel and calls fn for each text
-// message until ctx is cancelled. Messages the account sent from another
-// device also arrive here; fn decides what to show.
+// Subscribe long-polls the account's inbox channel and calls fn for every
+// message until ctx is cancelled. Message actions are not messages. Unknown
+// message types are retained; fn decides which conversations to show.
 func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 	channel := "inbox." + ch.UserHash
 	timetoken, region := "0", ""
@@ -170,6 +170,7 @@ func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 				R int    `json:"r"`
 			} `json:"t"`
 			M []struct {
+				E int             `json:"e"`
 				C string          `json:"c"`
 				D json.RawMessage `json:"d"`
 				U json.RawMessage `json:"u"`
@@ -191,10 +192,8 @@ func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 		region = fmt.Sprint(out.T.R)
 		for _, m := range out.M {
 			var d struct {
-				ID      string `json:"id"`
-				Payload struct {
-					Text string `json:"text"`
-				} `json:"payload"`
+				ID      string          `json:"id"`
+				Payload json.RawMessage `json:"payload"`
 			}
 			var u struct {
 				Type   string `json:"type"`
@@ -212,7 +211,7 @@ func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 			}
 			_ = json.Unmarshal(m.D, &d)
 			_ = json.Unmarshal(m.U, &u)
-			if u.Type != "text" && u.Type != "server-message" {
+			if m.E != 0 || u.Conv == "" {
 				continue
 			}
 			// The inbox envelope's timetoken is when Wallapop forwarded the
@@ -225,8 +224,10 @@ func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 					at = ns
 				}
 			}
+			msg := Message{ID: d.ID, FromSelf: u.From == ch.UserHash, At: at, Type: u.Type, Status: u.Status, TimeToken: timeToken, Conversation: u.Conv}
+			msg.decodePayload(d.Payload)
 			fn(Incoming{
-				Message:  Message{ID: d.ID, FromSelf: u.From == ch.UserHash, Text: d.Payload.Text, At: at, Type: u.Type, TimeToken: timeToken, Conversation: u.Conv},
+				Message:  msg,
 				FromUser: u.From,
 				ToUser:   u.To,
 				Channel:  u.OriginalChannel,

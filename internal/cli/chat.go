@@ -33,7 +33,7 @@ Examples:
   echo "Te lo dejo en 200" | wallapop chat send 8f1c2 -
   wallapop chat open 8f1c2`,
 	}
-	cmd.AddCommand(a.chatListCmd(), a.chatShowCmd(), a.chatSendCmd(), a.chatStartCmd(), a.chatOpenCmd(), a.chatArchiveCmd())
+	cmd.AddCommand(a.chatListCmd(), a.chatShowCmd(), a.chatSendCmd(), a.chatStartCmd(), a.chatOpenCmd(), a.chatArchiveCmd(), a.chatOfferCmd())
 	return cmd
 }
 
@@ -88,7 +88,10 @@ func (v inboxView) Pretty(w io.Writer, color bool) {
 		last, when := "", ""
 		if n := len(c.Messages); n > 0 {
 			m := c.Messages[n-1]
-			last = output.Truncate(m.Text, 40)
+			last = messageText(m)
+			if m.Offer == nil {
+				last = output.Truncate(last, 40)
+			}
 			if m.FromSelf {
 				last = "me: " + last
 			}
@@ -143,6 +146,9 @@ func (a *App) chatListCmd() *cobra.Command {
 				}
 				inbox.Conversations = kept
 			}
+			for i := range inbox.Conversations {
+				a.Client.HydrateOffers(cmd.Context(), inbox.Conversations[i].Messages)
+			}
 			return a.Printer.Print(inboxView(inbox))
 		},
 	}
@@ -174,7 +180,23 @@ func printMessage(w io.Writer, color bool, m wallapop.Message, other string) {
 	if m.Type == "server-message" {
 		who = "wallapop"
 	}
-	fmt.Fprintf(w, "%s %s: %s\n", output.Dim(m.At.Local().Format("01-02 15:04"), color), who, m.Text)
+	fmt.Fprintf(w, "%s %s: %s\n", output.Dim(m.At.Local().Format("01-02 15:04"), color), who, messageText(m))
+}
+
+func messageText(m wallapop.Message) string {
+	if m.Offer != nil {
+		return fmt.Sprintf("offer %.2f %s (%s)", m.Offer.Amount, m.Offer.Currency, strings.ToLower(m.Offer.Status))
+	}
+	if m.OfferID != "" {
+		return fmt.Sprintf("%s [offer %s: details unavailable]", m.Text, m.OfferID)
+	}
+	if m.Type != "" && m.Type != "text" && m.Type != "server-message" && m.Kind == "" {
+		return fmt.Sprintf("[%s] %s", m.Type, m.Text)
+	}
+	if m.Text == "" {
+		return fmt.Sprintf("[%s] %s", m.Type, m.Payload)
+	}
+	return m.Text
 }
 
 func (a *App) chatShowCmd() *cobra.Command {
@@ -212,6 +234,7 @@ func (a *App) chatShowCmd() *cobra.Command {
 					fmt.Fprintf(a.Stderr, "wallapop: could not mark as read: %v\n", err)
 				}
 			}
+			a.Client.HydrateOffers(ctx, conv.Messages)
 			return a.Printer.Print(convView(conv))
 		},
 	}
@@ -347,6 +370,7 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 			}
 			jsonl := a.Printer.Format == output.JSONL
 			if !jsonl {
+				a.Client.HydrateOffers(ctx, conv.Messages)
 				convView(conv).Pretty(a.Stdout, a.Printer.Color)
 				fmt.Fprintln(a.Stderr, output.Dim("type a message and press enter; /quit to leave", a.Printer.Color))
 			}
@@ -381,6 +405,9 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 					if in.Conversation != conv.Hash || in.FromSelf {
 						return
 					}
+					messages := []wallapop.Message{in.Message}
+					a.Client.HydrateOffers(ctx, messages)
+					in.Message = messages[0]
 					if jsonl {
 						_ = a.Printer.Print(in.Message)
 					} else {

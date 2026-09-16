@@ -138,13 +138,19 @@ type ChatItem struct {
 }
 
 type Message struct {
-	ID        string    `json:"id"`
-	FromSelf  bool      `json:"from_self"`
-	Text      string    `json:"text"`
-	At        time.Time `json:"at"`
-	Status    string    `json:"status,omitempty"`
-	Type      string    `json:"type,omitempty"`
-	TimeToken string    `json:"time_token,omitempty"`
+	ID         string          `json:"id"`
+	FromSelf   bool            `json:"from_self"`
+	Text       string          `json:"text"`
+	At         time.Time       `json:"at"`
+	Status     string          `json:"status,omitempty"`
+	Type       string          `json:"type,omitempty"`
+	TimeToken  string          `json:"time_token,omitempty"`
+	Kind       string          `json:"kind,omitempty"`
+	OfferID    string          `json:"offer_id,omitempty"`
+	Offer      *Offer          `json:"offer,omitempty"`
+	Buyer      string          `json:"buyer,omitempty"`
+	OfferError string          `json:"offer_error,omitempty"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
 	// Conversation is set on messages received live, where the caller has to
 	// route by conversation itself.
 	Conversation string `json:"conversation,omitempty"`

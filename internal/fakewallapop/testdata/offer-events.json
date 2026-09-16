@@ -1,0 +1,16 @@
+[
+  {
+    "a": "38", "f": 0,
+    "p": {"t": "17895932255515902", "r": 41},
+    "k": "sub-c-89405e27-d4df-4d87-aca1-d6e9118f0a0d", "c": "inbox.kmznw7w2k7zn",
+    "u": {"type": "server-message", "date": 1789593225517, "to_user_hash": "kmznw7w2k7zn", "from_user_hash": "p8j35kmwr7z9", "conversation_hash": "convhash0001"},
+    "d": {"id": "0748a845-c5ba-478c-a578-6f5fd2675296", "payload": {"payload": "{\"text\":\"Buyer ha hecho una oferta de 0,85€.\",\"type\":\"delivery\",\"actionURL\":\"/delivery/convhash0001\",\"buttons\":[{\"loc-key\":\"chat_buyer_all_all_third_voice_button\",\"loc-value\":\"Ver\",\"action\":\"https://wallapop.com/app/chat/offer/11111111-1111-4111-8111-111111111111\"}],\"enrichedPayload\":null}"}}
+  },
+  {
+    "a": "38", "f": 0,
+    "p": {"t": "17895932456735108", "r": 43},
+    "k": "sub-c-89405e27-d4df-4d87-aca1-d6e9118f0a0d", "c": "inbox.kmznw7w2k7zn",
+    "u": {"type": "server-message", "date": 1789593245643, "to_user_hash": "kmznw7w2k7zn", "from_user_hash": "p8j35kmwr7z9", "conversation_hash": "convhash0001"},
+    "d": {"id": "3639f29d-e208-46f8-ada4-9e734a1e9f66", "payload": {"payload": "{\"text\":\"Has rechazado la oferta.\",\"type\":\"delivery\",\"actionURL\":\"/delivery/convhash0001\",\"buttons\":[{\"loc-key\":\"chat_buyer_all_all_third_voice_button\",\"loc-value\":\"Ver\",\"action\":\"https://wallapop.com/app/chat/offer/11111111-1111-4111-8111-111111111111\"}],\"enrichedPayload\":null}"}}
+  }
+]

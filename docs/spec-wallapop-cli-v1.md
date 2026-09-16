@@ -70,6 +70,15 @@ A single-binary Go CLI, `wallapop`, that logs in with the user's own account by 
 45. As a buyer, I want to archive and unarchive Conversations, so that my inbox stays clean.
 46. As a buyer, I want a clear error when Wallapop refuses to open more new Conversations, so that I know it is their cap and not my mistake.
 
+Offer scope revised by the owner on 2026-09-16, recorded in [ADR 0002](adr/0002-offers.md):
+- Buyers can send `chat offer CONV AMOUNT`; the current daily allowance and price floor are
+  checked before any offer write, and violations are usage errors.
+- Sellers can run `chat offer decline CONV` on the latest incoming pending offer.
+- List, show and live chat display each linked offer's current amount, currency and state.
+  Unknown Message types remain visible. Failed offer-card reads do not hide the Message.
+- Accepting and counter-offering are not exposed. Accepting enters the delivery checkout
+  flow and needs a separate ticket and approval.
+
 ### Watches, Checks, Events, Sinks
 
 47. As a buyer, I want to save a Search as a Watch, so that new listings find me instead of the other way round.
@@ -128,6 +137,12 @@ A single-binary Go CLI, `wallapop`, that logs in with the user's own account by 
 - Item references: 12-character hash or full item URL. Bare numeric ids are rejected with a hint because the item page requires the slug. Hash lookups combine the API detail (slug, description, condition, counters) with the item page's `__NEXT_DATA__` (reserved, sold, expired, on-hold, modified date). URL lookups need the page only. A page 404 after an API hit marks the Item expired.
 - User references: hash, profile URL, or slug; slugs resolve through the profile page's `__NEXT_DATA__`.
 - Chat: inbox and single-conversation reads come from the messaging BFF; older pages from the instant-messaging archive endpoint; the BFF's newest-first order is reversed to oldest-first. Sending publishes over PubNub REST on the server-supplied channel with the web's message and meta shape (`type: text`, sender platform, from/to user hashes, conversation hash). Receiving long-polls PubNub subscribe on `inbox.<user hash>` and filters by conversation hash. Read receipts are PubNub message actions of type `seen` on the last inbound Message. New Conversations are created with the instant-messaging conversation endpoint and API code 100 is surfaced as "blocked". Archive and unarchive treat 409 as success. Channel strings are opaque and never constructed.
+- Offers: the delivery BFF supplies current restrictions and offer status cards. Sends use
+  `POST /api/v3/delivery/buyer/offers` with a client UUID; declines use the offer status PATCH
+  with `DECLINED` only. Nested third-voice payload button links connect REST and PubNub
+  Messages to offer cards. Current card state is explicit rather than inferred from localized
+  text. Raw payloads, original Message identity and unread behavior remain intact. Offer
+  sending is not exposed through MCP. See the recorded shapes in `cli-spec.md`.
 - Conversation references: full hash tried directly; otherwise prefix or Item hash matched across the first three inbox pages; multiple matches are a usage error listing them.
 - Watches: stored in SQLite with kind (search, item, seller), a kind-specific JSON target, Sink names, interval, pages, Profile, and a baselined flag. Per-Watch seen state holds hash, price, reserved, sold, title, modified date and a JSON snapshot. Events are appended with type, time, item JSON and change JSON.
 - Check semantics: search Watches diff the configured number of pages and report `item.new`, `item.price_changed`, `item.reserved`, `item.unreserved`; departures are not reported because page one churns. Item Watches additionally report `item.sold`, `item.removed` (page 404 or expired flag) and `item.edited` (modified date advanced with no other change). Seller Watches report `seller.new_item`, price and reservation changes, and `item.removed` when a hash leaves the complete list. The first Check baselines silently unless `--emit-initial`.
@@ -158,7 +173,7 @@ A good test drives the CLI the way a user or script does and asserts only on obs
 
 - Email and password login and the MFA email-approve flow.
 - Creating or editing Items, including image upload.
-- Creating or deleting Wallapop's server-side saved searches (reading them and importing one as a Watch arrived with #6), offers, wallet, shipping, payments, reviews writing, settings edits, blocking users, phone sharing, translation.
+- Creating or deleting Wallapop's server-side saved searches (reading them and importing one as a Watch arrived with #6), accepting or countering offers, wallet, shipping execution, payments, reviews writing, settings edits, blocking users, phone sharing, translation.
 - Reading browser cookie stores directly.
 - A TUI, an MCP server, an `agent` command.
 - Windows scheduled-task installation, Windows ACL hardening.
