@@ -597,6 +597,14 @@ func TestChatOpenIgnoresMessageActions(t *testing.T) {
 	it := h.fake.AddItem(bike("hashmmmmmmmm", 10))
 	h.fake.AddConversation(fakewallapop.Conversation{Hash: "convhash0001", Item: it.Hash})
 	r := h.runUntil("hola desde el fake", "chat", "open", "convhash0001", "--format", "jsonl")
+	// Without these two the assertion below passes on an empty stdout, which
+	// is exactly what a broken receive path produces.
+	if r.code != 0 {
+		t.Fatalf("exit %d stderr %s", r.code, r.stderr)
+	}
+	if !strings.Contains(r.stdout, "hola desde el fake") {
+		t.Fatalf("the message itself never arrived:\n%s", r.stdout)
+	}
 	if strings.Contains(r.stdout, "actionTimetoken") || strings.Contains(r.stdout, `"type":"seen"`) {
 		t.Fatalf("a message action leaked into the stream:\n%s", r.stdout)
 	}

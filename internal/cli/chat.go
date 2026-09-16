@@ -352,22 +352,40 @@ With --format jsonl, incoming messages are printed as JSON objects instead.`,
 			if conv.Unread > 0 {
 				_ = ch.MarkRead(ctx, conv)
 			}
+			// Receipts go to a worker rather than the receive loop. Subscribe
+			// calls the callback serially, so a slow message-action POST would
+			// hold up this message and every one queued behind it. A receipt
+			// is worth less than the stream, so a full queue drops it.
+			receipts := make(chan wallapop.Incoming, 32)
+			go func() {
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case in := <-receipts:
+						_ = ch.MarkSeen(ctx, in.Channel, in.TimeToken)
+					}
+				}
+			}()
 			subErr := make(chan error, 1)
 			go func() {
 				subErr <- ch.Subscribe(ctx, func(in wallapop.Incoming) {
 					if in.Conversation != conv.Hash || in.FromSelf {
 						return
 					}
+					if jsonl {
+						_ = a.Printer.Print(in.Message)
+					} else {
+						printMessage(a.Stdout, a.Printer.Color, in.Message, conv.WithUser.Name)
+					}
 					// The open-time receipt only covered what was already
 					// there. Acknowledge this one too, the way opening the
 					// conversation does, or the sender watches "received" for
 					// the life of the session.
-					_ = ch.MarkSeen(ctx, in.Channel, in.TimeToken)
-					if jsonl {
-						_ = a.Printer.Print(in.Message)
-						return
+					select {
+					case receipts <- in:
+					default:
 					}
-					printMessage(a.Stdout, a.Printer.Color, in.Message, conv.WithUser.Name)
 				})
 			}()
 			lines := make(chan string)
