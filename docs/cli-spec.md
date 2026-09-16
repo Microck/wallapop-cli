@@ -33,6 +33,7 @@ me         show | items | favorites
 chat       list | show | send | start | open | archive
 watch      add (search|item|seller) | list | remove | check | run | events | service (install|uninstall|status)
 sink       list | test
+mcp        (no verb: serves) | install claude-code|codex|cursor
 config     path | get | set | list
 doctor
 skills     list | get
@@ -246,6 +247,43 @@ command = ["~/bin/on-wallapop-event"]
 
 - `sink list`, `sink test NAME` (sends a synthetic Event).
 
+### mcp
+
+`wallapop mcp` serves an agent harness over the Model Context Protocol, stdio
+transport: newline-delimited JSON-RPC 2.0 on stdin and stdout, methods
+`initialize`, `ping`, `tools/list`, `tools/call`. Protocol revisions answered:
+2024-11-05, 2025-03-26, 2025-06-18 (a client asking for one gets it back, any
+other gets the newest). Written against `net/http`-level primitives like the
+rest of the client, with no MCP SDK.
+
+- Each tool is defined as a CLI argv and runs the command in-process, so a
+  tool's output is the same JSON the command prints, by construction. A command
+  that fails comes back as a tool error whose text is the `--error-format json`
+  envelope, exit code included; a malformed call (unknown tool, argument of the
+  wrong type, missing required argument) is a JSON-RPC `-32602` instead, since
+  no command ran.
+- Tools: `search`, `item_show`, `user_show`, `watch_check`. Arguments mirror the
+  flags with dashes as underscores (`max_price`, `next_page` for `--next`);
+  `condition` is an array, `filter` an object of key/value. Unknown argument
+  names are refused rather than dropped.
+- Not exposed, and refused by name with the reason: `item reserve`, `item sold`,
+  `item delete`, `item create`, `item edit`. Destructive and money-adjacent
+  actions stay with the person at the terminal.
+- `chat_list`, `chat_show`, `chat_send` and `chat_start` are written but gated
+  off (`chatToolsEnabled` in `internal/mcp`) until live PubNub receive is
+  verified end to end; until then asking for one says so.
+- Every invocation re-reads config and credentials, so a long-running server
+  follows a rotated session and picks up new watches. `--profile` given to
+  `wallapop mcp` applies to every tool call.
+- `wallapop mcp install claude-code|codex|cursor` writes the entry into
+  `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), `~/.codex/config.toml`
+  (or `$CODEX_HOME/config.toml`) and `~/.cursor/mcp.json`. The command is the
+  running executable, the args are `mcp` plus `--profile NAME` when one is
+  given. Other entries survive; codex's TOML is edited as text so comments and
+  key order survive too. Output is `{harness,path,action,command,args}` with
+  action `added`, `updated` or `unchanged`, so a second run is a no-op that
+  says so.
+
 ### config / doctor / skills / completion
 
 - `config path | list | get KEY | set KEY VALUE` on `config.toml`.
@@ -370,6 +408,7 @@ wallapop chat send 8f1c2 "Sigue disponible?"
 wallapop chat start k2j3h4g5f6d7 "Hola, lo recogería hoy"
 echo "Te lo dejo en 200" | wallapop chat send 8f1c2 -
 wallapop chat open 8f1c2
+wallapop mcp install claude-code                      # then the harness runs `wallapop mcp`
 ```
 
 ## 12. Open items carried into implementation
@@ -384,11 +423,11 @@ wallapop chat open 8f1c2
 
 Email+password login, creating or editing Items (image upload), Wallapop server-side saved searches (v2, read-only),
 offers and anything touching wallet, shipping or payments (never), settings edits (never),
-MCP server (v2), AUR/npm/Mintlify docs (after first stable release), Windows service install.
+AUR/npm/Mintlify docs (after first stable release), Windows service install.
 
 ## 14. Stack
 
-cobra + pflag, `net/http` (no HTTP framework, no PubNub SDK), `modernc.org/sqlite`,
+cobra + pflag, `net/http` (no HTTP framework, no PubNub SDK, no MCP SDK), `modernc.org/sqlite`,
 `pelletier/go-toml/v2`, `adrg/xdg`, goreleaser 2.x (homebrew cask, scoop, checksums with
 GitHub attestations), `curl | sh` installer. Tests: stdlib `testing`, `httptest.Server` as a
 fake Wallapop with redacted recorded fixtures, binary-level tests with an isolated XDG home.
@@ -403,6 +442,7 @@ internal/wallapop/   API client: session.go, search.go, items.go, users.go, chat
 internal/store/      sqlite schema, watches, events, seen-state
 internal/watch/      check logic per target type, diffing, event construction
 internal/sink/       ntfy, webhook, exec
+internal/mcp/        mcp stdio server, tool table, harness install
 internal/output/     json/jsonl/pretty/toon renderers, error envelope, exit codes
 internal/config/     config.toml, credentials.toml, xdg paths
 internal/cli/skills/ embedded agent docs (go:embed needs them beside the package)
