@@ -1053,6 +1053,40 @@ func TestItemCreateRejectsUnknownAttr(t *testing.T) {
 
 // The common fields have typed flags; --attr must not be a second way in,
 // or `--attr title=` would silently beat `--title`.
+// Half a coordinate pair would publish the listing at a real latitude and a
+// zero longitude, so it is refused before anything is sent.
+func TestItemCreateRejectsHalfACoordinatePair(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	img := filepath.Join(h.home, "a.png")
+	testPNG(t, img)
+	r := h.run("", "item", "create",
+		"--title", "T", "--description", "D", "--price", "5",
+		"--category", "17001", "--condition", "good",
+		"--lat", "41.39", "--image", img)
+	if r.code != 2 || !strings.Contains(r.stderr, "--lng") {
+		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+	}
+	if h.fake.CreateCalls != 0 {
+		t.Fatal("create reached Wallapop with half a coordinate pair")
+	}
+}
+
+// An image whose name carries a quote must still arrive as a readable
+// multipart part.
+func TestItemCreateAcceptsQuotedImageName(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	img := filepath.Join(h.home, `a"b.png`)
+	testPNG(t, img)
+	h.must("", "item", "create",
+		"--title", "T", "--description", "D", "--price", "5",
+		"--category", "17001", "--condition", "good", "--image", img)
+	if h.fake.CreateCalls != 1 {
+		t.Fatalf("create calls = %d, want 1", h.fake.CreateCalls)
+	}
+}
+
 func TestItemCreateRejectsCommonAttr(t *testing.T) {
 	h := newHarness(t)
 	h.login()

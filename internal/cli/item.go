@@ -258,6 +258,11 @@ Examples:
 			if len(missing) > 0 {
 				return output.Usagef("missing required %s", strings.Join(missing, ", "))
 			}
+			// The coordinates are a pair: one alone would publish the
+			// listing at a real latitude and a zero longitude.
+			if cmd.Flags().Changed("lat") != cmd.Flags().Changed("lng") {
+				return output.Usagef("--lat and --lng go together. Pass both, or neither to use the profile location")
+			}
 			loc, err := a.location(lat, lng, 0)
 			if err != nil {
 				return err

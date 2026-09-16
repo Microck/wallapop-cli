@@ -22,6 +22,11 @@ import (
 	"strings"
 )
 
+// quoteEscaper matches what mime/multipart does to its own filenames: a
+// basename holding a quote or a backslash would otherwise close the header
+// early and leave the image part unreadable.
+var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, `\"`)
+
 // UploadAccept is the media type the item write endpoints route on. Without
 // it POST /api/v3/items answers 405.
 const UploadAccept = "application/vnd.upload-v2+json"
@@ -280,7 +285,7 @@ func (c *Client) writeItem(ctx context.Context, method, path, accept string, pay
 				ct = "application/octet-stream"
 			}
 			fw, err := w.CreatePart(textproto.MIMEHeader{
-				"Content-Disposition": {fmt.Sprintf(`form-data; name="image"; filename="%s"`, img.Name)},
+				"Content-Disposition": {fmt.Sprintf(`form-data; name="image"; filename="%s"`, quoteEscaper.Replace(img.Name))},
 				"Content-Type":        {ct},
 			})
 			if err != nil {
