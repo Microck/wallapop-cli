@@ -214,14 +214,21 @@ func TestMCPWithholdsSellerActionsAndChatUntilReceiveIsVerified(t *testing.T) {
 	if resp := s.request("wallapop/please", nil); resp["error"] == nil {
 		t.Errorf("unknown method should be a jsonrpc error: %v", resp)
 	}
-	// A request that does not declare JSON-RPC 2.0 runs nothing.
-	s.write(map[string]any{"id": 99, "method": "tools/call", "params": map[string]any{"name": "watch_check"}})
-	line, err := s.out.ReadBytes('\n')
-	if err != nil {
-		t.Fatalf("no answer to the versionless request: %v", err)
+	// A malformed envelope runs nothing: no version marker, or an id that is
+	// not a scalar.
+	malformed := []map[string]any{
+		{"id": 99, "method": "tools/call", "params": map[string]any{"name": "watch_check"}},
+		{"jsonrpc": "2.0", "id": map[string]any{"a": 1}, "method": "tools/call", "params": map[string]any{"name": "watch_check"}},
 	}
-	if !strings.Contains(string(line), "jsonrpc") || !strings.Contains(string(line), "-32600") {
-		t.Errorf("versionless request was not refused: %s", line)
+	for _, msg := range malformed {
+		s.write(msg)
+		line, err := s.out.ReadBytes('\n')
+		if err != nil {
+			t.Fatalf("no answer to %v: %v", msg, err)
+		}
+		if !strings.Contains(string(line), "-32600") {
+			t.Errorf("%v was not refused: %s", msg, line)
+		}
 	}
 }
 

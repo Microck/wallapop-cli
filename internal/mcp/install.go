@@ -339,11 +339,24 @@ func writeFile(path string, content []byte, mode os.FileMode) error {
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, content, mode); err != nil {
+	// A temp file of its own: two installs running at once must not share one,
+	// and the rename onto the config is still atomic.
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	defer os.Remove(tmp.Name()) // no-op once the rename has moved it
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), mode); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // followDanglingLink walks a chain of symlinks to the name at its end, which

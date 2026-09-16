@@ -133,6 +133,12 @@ func (s *Server) handle(ctx context.Context, line []byte) (response, bool) {
 	if len(req.ID) == 0 {
 		return response{}, false
 	}
+	// JSON-RPC ids are scalars. An object or an array is a malformed request,
+	// and nothing runs for one.
+	switch req.ID[0] {
+	case '{', '[', 't', 'f':
+		return errorResponse(nil, codeInvalidRequest, `"id" must be a string, a number or null`), true
+	}
 	if req.JSONRPC != "2.0" {
 		return errorResponse(req.ID, codeInvalidRequest, `"jsonrpc" must be "2.0"`), true
 	}
