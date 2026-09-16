@@ -197,7 +197,18 @@ Watches, Checks, Events and Sinks are defined in `CONTEXT.md`.
 - `watch service install [--interval DUR]` writes a systemd user service+timer (Linux) or
   a launchd agent (macOS) that runs `wallapop watch check --all --profile ...`. On Windows
   it prints the `schtasks` command to run by hand in cmd.exe (whole minutes, rounded up).
-  Other platforms get a usage error. `uninstall` fails if the scheduler cannot be stopped. On
+  Other platforms get a usage error. The unit pins the environment that decides where the
+  CLI reads and writes: `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`,
+  `WALLAPOP_CONFIG` and the three base-URL overrides go into the unit as they stood at
+  install time, because a scheduler starts a job with a bare environment and the timer would
+  otherwise check a different, empty state database and report nothing. A relative XDG value
+  is left out, since the CLI ignores it too and falls back to the `HOME` default; a relative
+  `WALLAPOP_CONFIG` is made absolute, since that one is read raw and the scheduler runs the
+  job from its own working directory.
+  `WALLAPOP_SESSION_TOKEN` is never written: unit files are world-readable. Install refuses
+  outright when a path that would go into the unit is relative, which happens when `HOME`
+  itself is relative: systemd ignores a relative `StandardOutput=` and would not look where
+  the units landed. `uninstall` fails if the scheduler cannot be stopped. On
   Linux, install also runs `loginctl enable-linger`, without which a user timer stops at
   logout and does not start at boot. `status` says `not installed` when the unit files are
   missing, otherwise what the scheduler reports: `active`/`inactive`/`failed` on systemd
@@ -206,9 +217,21 @@ Watches, Checks, Events and Sinks are defined in `CONTEXT.md`.
   last trigger time as `last_run`. `doctor` shows the same state. `uninstall` removes the
   units and the log. Output is appended to `$XDG_STATE_HOME/wallapop-cli/wallapop-watch-
   <profile>.log`; `watch check` renames it to `.log.1` once it passes 1 MiB, so the log is
-  bounded by two files of about that size. Verified on systemd 2026-09-15: the timer fires
-  on install and on the interval and Events land in the log. Reboot and launchd not yet
-  exercised.
+  bounded by two files of about that size.
+
+  Verified live on systemd 249 (2026-09-16), against the fake Wallapop, at a 30s interval:
+  install registers, enables and starts the timer; it fires on install and on every
+  interval; Events from the scheduled runs reach the log, the Event history and the Watch's
+  Sinks; `status` reports `active` with the last trigger time and `doctor` reports the same;
+  a log padded past 1 MiB is rotated to `.log.1` by the next scheduled run, which then
+  starts a fresh log; `uninstall` leaves no unit file, no timer, no unit systemd still knows
+  about and no log, and `status` and `doctor` then say `not installed`. Reboot itself was
+  not exercised, and stands on `systemctl --user is-enabled` reporting `enabled` plus linger
+  being on, which is what makes a user timer start without a login. The box already had
+  linger enabled, so install's `loginctl enable-linger` branch ran but had nothing to do.
+  The launchd agent is unverified: no macOS host was available. Its plist is covered by a
+  test that parses it and checks the keys launchd needs, and the `schtasks` line by a test
+  that pins its quoting and rounding, but neither has run on its own platform.
 
 Event types: `item.new`, `item.price_changed`, `item.reserved`, `item.unreserved`,
 `item.sold`, `item.removed`, `item.edited`, `seller.new_item`. Event shape:
