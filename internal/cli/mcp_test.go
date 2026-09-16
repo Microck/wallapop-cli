@@ -452,7 +452,8 @@ func TestMCPInstallKeepsSettingsItDoesNotOwn(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cursor), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	existing := `{"mcpServers":{"wallapop":{"command":"old","args":["mcp"],"env":{"WALLAPOP_PROFILE":"work"},"timeout":60}}}`
+	// The big integer is there on purpose: a float64 round-trip would round it.
+	existing := `{"bigId":9007199254740993,"mcpServers":{"wallapop":{"command":"old","args":["mcp"],"env":{"WALLAPOP_PROFILE":"work"},"timeout":60}}}`
 	if err := os.WriteFile(cursor, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -471,6 +472,26 @@ func TestMCPInstallKeepsSettingsItDoesNotOwn(t *testing.T) {
 	entry := doc.MCPServers["wallapop"]
 	if entry.Command == "old" || entry.Env["WALLAPOP_PROFILE"] != "work" || entry.Timeout != 60 {
 		t.Fatalf("install dropped settings it does not own: %s", raw)
+	}
+	if !strings.Contains(string(raw), "9007199254740993") {
+		t.Fatalf("a large integer was rounded on the way through: %s", raw)
+	}
+}
+
+func TestMCPInstallHandlesAnEmptyJSONDocument(t *testing.T) {
+	h := newHarness(t)
+	cursor := filepath.Join(h.home, ".cursor", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(cursor), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// `null` is valid JSON and decodes to no map at all.
+	if err := os.WriteFile(cursor, []byte("null\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.must("", "mcp", "install", "cursor")
+	raw, _ := os.ReadFile(cursor)
+	if !strings.Contains(string(raw), `"wallapop"`) {
+		t.Fatalf("entry not written over a null document: %s", raw)
 	}
 }
 
@@ -539,10 +560,15 @@ func TestMCPInstallFollowsASymlinkedConfig(t *testing.T) {
 		t.Fatalf("the symlink target was not updated: %s", raw)
 	}
 
-	// A link whose target does not exist yet is still where the file belongs.
+	// A link whose target does not exist yet is still where the file belongs,
+	// through a chain of them as a dotfile manager tends to leave.
 	dangling := filepath.Join(h.home, ".claude.json")
+	middle := filepath.Join(h.home, "dotfiles", "claude-link.json")
 	wanted := filepath.Join(h.home, "dotfiles", "claude.json")
-	if err := os.Symlink(wanted, dangling); err != nil {
+	if err := os.Symlink(middle, dangling); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(wanted, middle); err != nil {
 		t.Fatal(err)
 	}
 	h.must("", "mcp", "install", "claude-code")

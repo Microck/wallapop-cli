@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -97,8 +98,16 @@ func installJSON(path, command string, args []string) (string, error) {
 		return "", err
 	}
 	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &doc); err != nil {
+		// UseNumber: a float64 round-trip would round any integer setting
+		// beyond 2^53 and quietly change a value this install promised to keep.
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		if err := dec.Decode(&doc); err != nil {
 			return "", fmt.Errorf("%s is not valid json: %w", path, err)
+		}
+		// A document of literal `null` decodes to a nil map.
+		if doc == nil {
+			doc = map[string]any{}
 		}
 	}
 	servers, _ := doc["mcpServers"].(map[string]any)
@@ -251,14 +260,11 @@ func tomlBlock(command string, args []string) string {
 func writeFile(path string, content []byte, mode os.FileMode) error {
 	if target, err := filepath.EvalSymlinks(path); err == nil {
 		path = target
-	} else if link, err := os.Readlink(path); err == nil {
+	} else if target, ok := followDanglingLink(path); ok {
 		// A link whose target does not exist yet still says where the file
 		// belongs; replacing the link with a regular file would break the
 		// dotfile manager that made it.
-		if !filepath.IsAbs(link) {
-			link = filepath.Join(filepath.Dir(path), link)
-		}
-		path = link
+		path = target
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
@@ -271,6 +277,24 @@ func writeFile(path string, content []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// followDanglingLink walks a chain of symlinks to the name at its end, which
+// EvalSymlinks refuses to report once that name does not exist. The hop limit
+// is the usual guard against a loop.
+func followDanglingLink(path string) (string, bool) {
+	found := false
+	for hop := 0; hop < 32; hop++ {
+		next, err := os.Readlink(path)
+		if err != nil {
+			return path, found
+		}
+		if !filepath.IsAbs(next) {
+			next = filepath.Join(filepath.Dir(path), next)
+		}
+		path, found = next, true
+	}
+	return path, found
 }
 
 func toAny(ss []string) []any {
