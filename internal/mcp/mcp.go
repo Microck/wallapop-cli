@@ -1,4 +1,4 @@
-// Package mcp serves the CLI's read and message commands to an agent harness
+// Package mcp serves the CLI's read commands to an agent harness
 // over the Model Context Protocol, stdio transport.
 //
 // The transport is newline-delimited JSON-RPC 2.0, which is all the stdio

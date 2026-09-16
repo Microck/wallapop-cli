@@ -18,7 +18,7 @@ import (
 func (a *App) mcpCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
-		Short: "Serve the read and message commands to an agent harness over MCP",
+		Short: "Serve the read commands to an agent harness over MCP",
 		Long: `Run a Model Context Protocol server on stdin/stdout.
 
 Tools mirror the CLI: each one runs the command it is named after and returns
