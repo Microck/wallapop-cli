@@ -33,27 +33,6 @@ func TestServeReturnsWhenTheContextIsCancelledOnIdleStdin(t *testing.T) {
 	}
 }
 
-// stripOwnedKeys decides what survives an update of a codex table, so the
-// spellings TOML allows are checked here rather than through one install per
-// case. Dropping a key it should keep, or keeping one it should drop, both
-// leave the file unparseable for codex.
-func TestStripOwnedKeysLeavesEverythingElseAlone(t *testing.T) {
-	cases := []struct{ name, body, want string }{
-		{"quoted keys", "\"command\" = \"old\"\n'args' = [\"mcp\"]\nenabled = true\n", "enabled = true\n"},
-		{"multi-line array", "args = [\n  \"mcp\",\n  \"--profile\", \"work\",\n]\nenabled = true\n", "enabled = true\n"},
-		{"bracket inside a string", "command = \"/opt/we[ird/wallapop\"\nstartup_timeout_sec = 30\n", "startup_timeout_sec = 30\n"},
-		{"comment after the value", "args = [\"mcp\"] # set by the installer\nenabled = true\n", "enabled = true\n"},
-		{"nothing owned", "enabled = true\n# a note\n", "enabled = true\n# a note\n"},
-		{"owned key as a dotted table", "command.path = \"old\"\nargs.extra = 1\nenabled = true\n", "enabled = true\n"},
-		{"key name inside a multi-line string", "note = \"\"\"\ncommand = \"not a key\"\n\"\"\"\nenabled = true\n", "note = \"\"\"\ncommand = \"not a key\"\n\"\"\"\nenabled = true\n"},
-	}
-	for _, tc := range cases {
-		if got := stripOwnedKeys(tc.body); got != tc.want {
-			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
-		}
-	}
-}
-
 // The header this CLI owns can also appear as somebody's text. Rewriting there
 // would bury the entry inside a string and leave codex without a server.
 func TestFindOwnedTableSkipsAHeaderInsideAString(t *testing.T) {

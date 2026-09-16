@@ -285,8 +285,11 @@ rest of the client, with no MCP SDK.
   Codex's TOML is edited as text so comments and key order survive; an existing
   entry written in a spelling that rewrite cannot match (`["mcp_servers"."wallapop"]`,
   an inline table) stops the install with the lines to paste, rather than
-  appending a duplicate table that would break the file. A config that is a
-  symlink is followed, so a dotfile manager keeps its file. Output is
+  appending a duplicate table that would break the file. Quoted and escaped
+  `command` and `args` keys are recognized by their decoded names. Table-valued
+  `command` or `args`, including dotted keys and explicit subtables, stop the
+  install without changing the file and must be edited by hand. A config that
+  is a symlink is followed, so a dotfile manager keeps its file. Output is
   `{harness,path,action,command,args}` with
   action `added`, `updated` or `unchanged`, so a second run is a no-op that
   says so.

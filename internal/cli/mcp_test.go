@@ -549,6 +549,95 @@ func TestMCPInstallKeepsCodexServerSettings(t *testing.T) {
 	}
 }
 
+func TestMCPInstallUpdatesDecodedCodexKeys(t *testing.T) {
+	for _, assignments := range []string{
+		`"command" = "/opt/we[ird/wallapop"
+'args' = ["old"] # bracket in comment [
+`,
+		`"\u0063ommand" = "old"
+"\U00000061rgs" = [
+  """
+[profile]
+""",
+]
+`,
+	} {
+		t.Run(assignments, func(t *testing.T) {
+			h := newHarness(t)
+			codex := filepath.Join(h.home, ".codex", "config.toml")
+			if err := os.MkdirAll(filepath.Dir(codex), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			kept := "# keep these settings\nenabled = true\nnote = \"\"\"\ncommand = literal\n\\\"args\\\" = text\n\"\"\"\n"
+			other := "\n[mcp_servers.other]\ncommand = \"other-mcp\"\n"
+			body := "[mcp_servers.wallapop]\n" + kept + assignments + other
+			if err := os.WriteFile(codex, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var change struct {
+				Action  string
+				Command string
+			}
+			decode(t, h.must("", "mcp", "install", "codex").stdout, &change)
+			after, err := os.ReadFile(codex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc struct {
+				MCPServers map[string]struct {
+					Command string
+					Args    []string
+				} `toml:"mcp_servers"`
+			}
+			if err := toml.Unmarshal(after, &doc); err != nil {
+				t.Fatalf("install left duplicate or invalid keys: %v\n%s", err, after)
+			}
+			entry := doc.MCPServers["wallapop"]
+			if change.Action != "updated" || entry.Command != change.Command || strings.Join(entry.Args, " ") != "mcp" {
+				t.Fatalf("entry not updated: %+v, change %+v", entry, change)
+			}
+			if !strings.Contains(string(after), kept) || !strings.Contains(string(after), other) {
+				t.Fatalf("install changed unowned settings or comments:\n%s", after)
+			}
+			decode(t, h.must("", "mcp", "install", "codex").stdout, &change)
+			again, err := os.ReadFile(codex)
+			if err != nil || change.Action != "unchanged" || string(again) != string(after) {
+				t.Fatalf("second install mutated the config: action %q, error %v\n%s", change.Action, err, again)
+			}
+		})
+	}
+}
+
+func TestMCPInstallRefusesTableValuedCodexKeys(t *testing.T) {
+	for _, owned := range []string{
+		"[mcp_servers.wallapop.command]\npath = \"old\"\n",
+		"[mcp_servers.wallapop.\"\\u0061rgs\"]\nextra = 1\n",
+		"[[mcp_servers.wallapop.args]]\nextra = 1\n",
+		"command.path = \"old\"\nargs.extra = 1\n",
+		"command = {path = \"old\"}\n",
+	} {
+		t.Run(owned, func(t *testing.T) {
+			h := newHarness(t)
+			codex := filepath.Join(h.home, ".codex", "config.toml")
+			if err := os.MkdirAll(filepath.Dir(codex), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := "# keep this file intact\n[mcp_servers.wallapop]\nenabled = true\n" + owned
+			if err := os.WriteFile(codex, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r := h.run("", "mcp", "install", "codex")
+			if r.code == 0 {
+				t.Fatalf("install accepted a table-valued owned key: %s", r.stdout)
+			}
+			after, err := os.ReadFile(codex)
+			if err != nil || string(after) != body {
+				t.Fatalf("install mutated the config on failure: %v\n%s", err, after)
+			}
+		})
+	}
+}
+
 func TestMCPInstallFollowsASymlinkedConfig(t *testing.T) {
 	h := newHarness(t)
 	real := filepath.Join(h.home, "dotfiles", "cursor-mcp.json")

@@ -207,6 +207,22 @@ func installTOML(path, command string, args []string) (string, error) {
 			return "", err
 		}
 		if entry != nil {
+			// Explicit child tables lie outside the text range we rewrite.
+			// Check decoded values so dotted and escaped spellings agree too.
+			for _, key := range []string{"command", "args"} {
+				value := entry[key]
+				if values, ok := value.([]any); ok {
+					for _, element := range values {
+						if _, ok := element.(map[string]any); ok {
+							value = element
+							break
+						}
+					}
+				}
+				if _, ok := value.(map[string]any); ok {
+					return "", fmt.Errorf("%s has a table-valued mcp_servers.%s.%s that this command will not rewrite. Edit it by hand and run this again", path, ServerName, key)
+				}
+			}
 			entryExists = true
 			if entry["command"] == command && reflect.DeepEqual(entry["args"], toAny(args)) {
 				return actionUnchanged, nil
@@ -237,11 +253,18 @@ func installTOML(path, command string, args []string) (string, error) {
 		// settings (startup_timeout_sec, enabled, tool filters) in the same
 		// table, and they stay, comments included.
 		end := tableEnd(body, loc[0], loc[1])
-		kept := strings.TrimLeft(stripOwnedKeys(body[loc[1]:end]), "\n")
+		kept, err := stripOwnedKeys(body[loc[1]:end])
+		if err != nil {
+			return "", fmt.Errorf("cannot safely rewrite %s: %w", path, err)
+		}
+		kept = strings.TrimLeft(kept, "\n")
 		action, out = actionUpdated, body[:loc[0]]+block+kept+body[end:]
 	}
 	if crlf {
 		out = strings.ReplaceAll(out, "\n", "\r\n")
+	}
+	if !parsesTOML(out) {
+		return "", fmt.Errorf("cannot safely rewrite %s as valid toml. Edit it by hand and run this again", path)
 	}
 	return action, writeFile(path, []byte(out), 0o600)
 }
@@ -273,46 +296,38 @@ func tableEnd(body string, start, afterHeader int) int {
 	return len(body)
 }
 
-// ownedKey matches the two keys this CLI writes, in each of the spellings TOML
-// allows: bare, quoted, and as the head of a dotted key (`command.path = ...`
-// defines command as a table, which a plain `command = ...` beside it would
-// contradict).
-var ownedKey = regexp.MustCompile(`^[ \t]*(?:command|args|"command"|"args"|'command'|'args')[ \t]*[.=]`)
-
-// stripOwnedKeys drops the command and args assignments from one table's body,
-// a multi-line array value included, and returns what is left untouched.
-func stripOwnedKeys(body string) string {
+// stripOwnedKeys parses complete assignments to identify their decoded keys.
+// Quoted escapes have the same ownership as bare keys; apparent assignments
+// inside multi-line strings stay part of the enclosing value.
+func stripOwnedKeys(body string) (string, error) {
 	lines := strings.Split(body, "\n")
 	kept := make([]string, 0, len(lines))
-	for i := 0; i < len(lines); i++ {
-		// A line only starts an assignment when everything above it is a
-		// complete parse. Inside a multi-line string, a line reading
-		// `command = ...` is somebody's text, not a key.
-		if !ownedKey.MatchString(lines[i]) || !parsesTOML(strings.Join(lines[:i], "\n")) {
-			kept = append(kept, lines[i])
-			continue
+	for start := 0; start < len(lines); {
+		end := start
+		var parsed map[string]any
+		for {
+			if err := toml.Unmarshal([]byte(strings.Join(lines[start:end+1], "\n")), &parsed); err == nil {
+				break
+			}
+			end++
+			if end == len(lines) {
+				return "", errors.New("incomplete toml assignment")
+			}
+			parsed = nil
 		}
-		i = assignmentEnd(lines, i)
+		_, command := parsed["command"]
+		_, args := parsed["args"]
+		if !command && !args {
+			kept = append(kept, lines[start:end+1]...)
+		}
+		start = end + 1
 	}
-	return strings.Join(kept, "\n")
+	return strings.Join(kept, "\n"), nil
 }
 
 func parsesTOML(s string) bool {
 	var parsed map[string]any
 	return toml.Unmarshal([]byte(s), &parsed) == nil
-}
-
-// assignmentEnd returns the index of the last line of the assignment starting
-// at start. A value may run over several lines, and a bracket inside a string
-// or a comment means nothing, so the TOML parser decides where it ends rather
-// than a character count: the first prefix that parses is the whole value.
-func assignmentEnd(lines []string, start int) int {
-	for end := start; end < len(lines); end++ {
-		if parsesTOML(strings.Join(lines[start:end+1], "\n")) {
-			return end
-		}
-	}
-	return start
 }
 
 func tomlBlock(command string, args []string) string {
