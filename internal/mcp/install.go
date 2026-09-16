@@ -60,23 +60,29 @@ func Install(harness, command string, args []string) (Change, error) {
 // configPath locates the harness config. Each harness's own home variable wins,
 // so an install lands where that harness actually reads from.
 func configPath(harness string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+	// The home directory is only resolved where it is actually needed: a
+	// container or service account with CODEX_HOME set but no HOME still has
+	// everything this install requires.
+	inHome := func(parts ...string) (string, error) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(append([]string{home}, parts...)...), nil
 	}
 	switch harness {
 	case "claude-code":
 		if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
 			return filepath.Join(dir, ".claude.json"), nil
 		}
-		return filepath.Join(home, ".claude.json"), nil
+		return inHome(".claude.json")
 	case "codex":
 		if dir := os.Getenv("CODEX_HOME"); dir != "" {
 			return filepath.Join(dir, "config.toml"), nil
 		}
-		return filepath.Join(home, ".codex", "config.toml"), nil
+		return inHome(".codex", "config.toml")
 	case "cursor":
-		return filepath.Join(home, ".cursor", "mcp.json"), nil
+		return inHome(".cursor", "mcp.json")
 	}
 	return "", fmt.Errorf("unknown harness %q. Choose one of %s", harness, strings.Join(Harnesses, ", "))
 }
@@ -125,10 +131,11 @@ func installJSON(path, command string, args []string) (string, error) {
 }
 
 // tomlTable matches the table header this CLI owns, bare or quoted;
-// tomlNextTable finds where that table ends, at the next header.
+// tomlNextTable finds where that table ends, at the next header. TOML allows
+// whitespace before a header, so both accept it.
 var (
-	tomlTable     = regexp.MustCompile(`(?m)^\[mcp_servers\.(?:` + ServerName + `|"` + ServerName + `")\]\s*$`)
-	tomlNextTable = regexp.MustCompile(`(?m)^\[`)
+	tomlTable     = regexp.MustCompile(`(?m)^[ \t]*\[mcp_servers\.(?:` + ServerName + `|"` + ServerName + `")\][ \t]*$`)
+	tomlNextTable = regexp.MustCompile(`(?m)^[ \t]*\[`)
 )
 
 // installTOML edits codex's config.toml as text. A generic parse-and-remarshal

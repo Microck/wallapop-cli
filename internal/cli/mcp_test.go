@@ -477,14 +477,16 @@ func TestMCPInstallKeepsCodexServerSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	// codex keeps its own per-server settings in the same table.
-	body := "[mcp_servers.wallapop]\ncommand = \"old\"\n# how long codex waits\nstartup_timeout_sec = 30\nargs = [\n  \"mcp\",\n]\nenabled = true\n\n[mcp_servers.other]\ncommand = \"other-mcp\"\n"
+	// The next table is indented, which TOML allows: the rewrite must stop at
+	// it rather than reaching into another server's settings.
+	body := "[mcp_servers.wallapop]\ncommand = \"old\"\n# how long codex waits\nstartup_timeout_sec = 30\nargs = [\n  \"mcp\",\n]\nenabled = true\n\n  [mcp_servers.other]\n  command = \"other-mcp\"\n"
 	if err := os.WriteFile(codex, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	h.must("", "mcp", "install", "codex")
 
 	after, _ := os.ReadFile(codex)
-	for _, want := range []string{"# how long codex waits", "startup_timeout_sec = 30", "enabled = true", "[mcp_servers.other]"} {
+	for _, want := range []string{"# how long codex waits", "startup_timeout_sec = 30", "enabled = true", "[mcp_servers.other]", "command = \"other-mcp\""} {
 		if !strings.Contains(string(after), want) {
 			t.Fatalf("install dropped %q:\n%s", want, after)
 		}
