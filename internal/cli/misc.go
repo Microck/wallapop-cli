@@ -33,6 +33,7 @@ Examples:
   wallapop config set sinks.phone.type ntfy
   wallapop config set sinks.phone.url https://ntfy.sh
   wallapop config set sinks.phone.topic wallapop-deals
+  wallapop config set sinks.script.command '["/home/me/bin/on-event", "--verbose"]'
   wallapop config get sinks.phone`,
 	}
 	cmd.AddCommand(
@@ -53,12 +54,27 @@ Examples:
 			}
 			return a.Printer.Print(v)
 		}},
-		&cobra.Command{Use: "set KEY VALUE", Short: "Set one key (numbers and booleans are typed automatically)", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "set KEY VALUE", Short: "Set one key (exec commands use TOML string arrays)", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
 			doc, err := a.configDoc()
 			if err != nil {
 				return err
 			}
-			assign(doc, strings.Split(args[0], "."), typed(args[1]))
+			path := strings.Split(args[0], ".")
+			value := typed(args[1])
+			// Command is the only slice in config.Config. Parse it by its
+			// schema, not by a leading bracket in arbitrary string values.
+			if len(path) == 3 && path[0] == "sinks" && path[2] == "command" {
+				var array struct {
+					Value []string `toml:"value"`
+				}
+				dec := toml.NewDecoder(strings.NewReader("value = " + args[1]))
+				dec.DisallowUnknownFields()
+				if err := dec.Decode(&array); err != nil {
+					return output.Usagef("%q expects an array of strings, for example '[\"/home/me/bin/on-event\", \"--verbose\"]'", args[0])
+				}
+				value = array.Value
+			}
+			assign(doc, path, value)
 			raw, err := toml.Marshal(doc)
 			if err != nil {
 				return err
@@ -74,7 +90,7 @@ Examples:
 			if err := a.saveConfig(); err != nil {
 				return err
 			}
-			return a.Printer.Print(map[string]any{args[0]: typed(args[1])})
+			return a.Printer.Print(map[string]any{args[0]: value})
 		}},
 	)
 	return cmd
