@@ -4,10 +4,15 @@ The documentation site for `wallapop-cli`, built with Fumadocs on Next.js. Inten
 deployed at `wallapop.micr.dev`; not deployed yet.
 
 ```bash
-pnpm install
-pnpm dev      # http://localhost:3000/docs
-pnpm build
+npm ci
+npm run dev  # http://localhost:3000/docs
+npm run typecheck
+npm run build
+npm start    # serve the production build at http://localhost:3000/docs
 ```
+
+`npm ci` runs `fumadocs-mdx` through `postinstall` to generate the content types before
+typechecking or building. Node.js 22 is used in CI.
 
 ## Command reference
 

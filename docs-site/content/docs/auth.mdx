@@ -47,11 +47,13 @@ CLI also picks up `device_id` if it is there.
 wallapop auth login --cookies ~/Downloads/cookies.txt
 ```
 
-Or paste the value straight in, with no file:
+Or run the interactive prompt and paste the cookie value when asked:
 
 ```bash
-wallapop auth login --cookies-stdin
+wallapop auth login
 ```
+
+`--cookies-stdin` reads until end-of-file; use it when piping an export into the command.
 </Step>
 </Steps>
 

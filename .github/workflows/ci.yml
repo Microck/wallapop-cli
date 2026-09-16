@@ -38,22 +38,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: docs-site/pnpm-lock.yaml
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
       - name: generate command reference
         run: make docs
       - name: install
-        run: pnpm install --frozen-lockfile
+        run: npm ci
         working-directory: docs-site
       - name: typecheck
-        run: pnpm typecheck
+        run: npm run typecheck
         working-directory: docs-site
       - name: build
-        run: pnpm build
+        run: npm run build
         working-directory: docs-site

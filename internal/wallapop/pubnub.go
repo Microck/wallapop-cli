@@ -9,15 +9,20 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
 // PubNub REST, the three calls the web chat makes. The channel strings come
 // from Wallapop and are opaque; the CLI never constructs one.
 
-// Chat is a live messaging handle for one account.
+// Chat is a live messaging handle for one account. It is safe to use from
+// several goroutines: `chat open` subscribes on one, publishes typed lines on
+// another and posts receipts on a third, and all three refresh the same token.
 type Chat struct {
-	client   *Client
+	client *Client
+	// mu guards token, which every call refreshes and reads.
+	mu       sync.Mutex
 	token    ChatToken
 	UserHash string
 }
@@ -31,7 +36,12 @@ func (c *Client) NewChat(ctx context.Context, userHash string) (*Chat, error) {
 	return &Chat{client: c, token: tok, UserHash: userHash}, nil
 }
 
+// refreshToken fetches a new token when the current one is close to expiring.
+// The lock is held across the fetch so two callers cannot both decide the token
+// is stale and race each other to replace it.
 func (ch *Chat) refreshToken(ctx context.Context) error {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
 	if time.Until(ch.token.Expires) > time.Minute {
 		return nil
 	}
@@ -44,7 +54,10 @@ func (ch *Chat) refreshToken(ctx context.Context) error {
 }
 
 func (ch *Chat) baseQuery() url.Values {
-	return url.Values{"uuid": {ch.UserHash}, "auth": {ch.token.Token}, "pnsdk": {"wallapop-cli"}}
+	ch.mu.Lock()
+	token := ch.token.Token
+	ch.mu.Unlock()
+	return url.Values{"uuid": {ch.UserHash}, "auth": {token}, "pnsdk": {"wallapop-cli"}}
 }
 
 // Send publishes a text message. Payload and meta match the web client
@@ -98,10 +111,21 @@ func (ch *Chat) MarkRead(ctx context.Context, conv Conversation) error {
 	if last == nil || conv.Channel == "" {
 		return nil
 	}
+	return ch.MarkSeen(ctx, conv.Channel, last.TimeToken)
+}
+
+// MarkSeen signals "seen" on one message. Live messages need this as well as
+// the conversation-level MarkRead: a session left open receives messages the
+// open-time receipt could not have covered, and without it the sender is left
+// looking at "received" for as long as the session lasts.
+func (ch *Chat) MarkSeen(ctx context.Context, channel, timeToken string) error {
+	if channel == "" || timeToken == "" {
+		return nil
+	}
 	if err := ch.refreshToken(ctx); err != nil {
 		return err
 	}
-	path := fmt.Sprintf("/v1/message-actions/%s/channel/%s/message/%s", pubNubSubscribeKey, url.PathEscape(conv.Channel), last.TimeToken)
+	path := fmt.Sprintf("/v1/message-actions/%s/channel/%s/message/%s", pubNubSubscribeKey, url.PathEscape(channel), timeToken)
 	_, err := ch.client.do(ctx, request{method: http.MethodPost, base: ch.client.PubNubBase, path: path, query: ch.baseQuery(),
 		body: map[string]string{"type": "seen", "value": "{}"}, acceptStatus: []int{http.StatusConflict}}, nil)
 	return pubnubError(err)
@@ -113,6 +137,10 @@ type Incoming struct {
 	Message
 	FromUser string
 	ToUser   string
+	// Channel is the conversation channel the message was published on,
+	// which is where a read receipt for it has to go. The inbox channel it
+	// arrived on is a forwarding copy and marking that one does nothing.
+	Channel string
 }
 
 // Subscribe long-polls the account's inbox channel and calls fn for each text
@@ -121,6 +149,12 @@ type Incoming struct {
 func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 	channel := "inbox." + ch.UserHash
 	timetoken, region := "0", ""
+	// PubNub holds the request up to ~280 s, which no other call wants. This
+	// is a separate client rather than a swap of the shared one: `chat open`
+	// publishes typed lines while a poll is in flight, and mutating the
+	// client under it is a data race.
+	poller := *ch.client.HTTP
+	poller.Timeout = 5 * time.Minute
 	for {
 		if err := ch.refreshToken(ctx); err != nil {
 			return err
@@ -144,14 +178,9 @@ func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 				} `json:"p"`
 			} `json:"m"`
 		}
-		// PubNub holds the request up to ~280 s; the client timeout must allow that.
-		sub := *ch.client.HTTP
-		sub.Timeout = 5 * time.Minute
-		saved := ch.client.HTTP
-		ch.client.HTTP = &sub
 		_, err := ch.client.do(ctx, request{method: http.MethodGet, base: ch.client.PubNubBase,
-			path: fmt.Sprintf("/v2/subscribe/%s/%s/0", pubNubSubscribeKey, url.PathEscape(channel)), query: q}, &out)
-		ch.client.HTTP = saved
+			path:  fmt.Sprintf("/v2/subscribe/%s/%s/0", pubNubSubscribeKey, url.PathEscape(channel)),
+			query: q, httpClient: &poller}, &out)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -173,22 +202,34 @@ func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 				To     string `json:"to_user_hash"`
 				Conv   string `json:"conversation_hash"`
 				Status string `json:"status"`
+				// Recorded live 2026-09-16: the inbox copy carries the
+				// message's identity on its own conversation channel. Every
+				// other part of Wallapop, the REST message list and the read
+				// receipts included, keys off these and not off the inbox
+				// envelope's own timetoken.
+				OriginalTimeToken string `json:"original_time_token"`
+				OriginalChannel   string `json:"original_channel"`
 			}
 			_ = json.Unmarshal(m.D, &d)
 			_ = json.Unmarshal(m.U, &u)
 			if u.Type != "text" && u.Type != "server-message" {
 				continue
 			}
+			// The inbox envelope's timetoken is when Wallapop forwarded the
+			// copy, a few milliseconds after the message was published. The
+			// original is the one that identifies the message everywhere else.
+			timeToken := firstNonEmpty(u.OriginalTimeToken, m.P.T)
 			at := time.Now()
-			if len(m.P.T) > 7 {
-				if ns, err := parseTimetoken(m.P.T); err == nil {
+			if len(timeToken) > 7 {
+				if ns, err := parseTimetoken(timeToken); err == nil {
 					at = ns
 				}
 			}
 			fn(Incoming{
-				Message:  Message{ID: d.ID, FromSelf: u.From == ch.UserHash, Text: d.Payload.Text, At: at, Type: u.Type, TimeToken: m.P.T, Conversation: u.Conv},
+				Message:  Message{ID: d.ID, FromSelf: u.From == ch.UserHash, Text: d.Payload.Text, At: at, Type: u.Type, TimeToken: timeToken, Conversation: u.Conv},
 				FromUser: u.From,
 				ToUser:   u.To,
+				Channel:  u.OriginalChannel,
 			})
 		}
 	}

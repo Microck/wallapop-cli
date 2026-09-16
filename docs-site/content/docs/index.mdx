@@ -5,14 +5,14 @@ description: Drive Wallapop from the terminal. Search, listings, chat and watche
 
 Wallapop is a browser-and-app-only marketplace with no public API. `wallapop` is a single Go
 binary that logs in with your own account by importing your browser session, then exposes the
-site's buyer-side features as noun-verb commands that print JSON.
+site's search, listing and chat features as noun-verb commands that print JSON.
 
 That makes the marketplace scriptable: you can pipe a search into `jq`, keep a watch running
 from a systemd timer, or hand the whole thing to an agent.
 
 <Cards>
   <Card title="Install" href="/docs/install">
-    One command on macOS, Linux and Windows.
+    Build from source with Go.
   </Card>
   <Card title="Log in" href="/docs/auth">
     Export a cookie once, then stay logged in for about a month.
@@ -34,7 +34,7 @@ wallapop chat send 8f1c2 "Sigue disponible?"
 wallapop watch add search "vinilos" --max-price 20
 ```
 
-Every command prints JSON unless you ask for something else:
+Most commands print JSON by default. `chat open` starts an interactive text session.
 
 ```bash
 wallapop search "teclado mecanico" --format pretty

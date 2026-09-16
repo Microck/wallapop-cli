@@ -26,6 +26,7 @@ docs:
 
 docs-check: docs
 	git diff --exit-code -- docs-site/content/docs/reference
+	test -z "$$(git ls-files --others --exclude-standard -- docs-site/content/docs/reference)"
 
 install:
 	go install -ldflags "-X main.version=$$(git describe --tags --always --dirty)" ./cmd/wallapop
