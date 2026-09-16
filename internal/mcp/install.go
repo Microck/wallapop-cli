@@ -273,9 +273,11 @@ func tableEnd(body string, start, afterHeader int) int {
 	return len(body)
 }
 
-// ownedKey matches the two assignments this CLI writes, in each of the
-// spellings TOML allows for a bare key.
-var ownedKey = regexp.MustCompile(`^\s*(?:command|args|"command"|"args"|'command'|'args')\s*=`)
+// ownedKey matches the two keys this CLI writes, in each of the spellings TOML
+// allows: bare, quoted, and as the head of a dotted key (`command.path = ...`
+// defines command as a table, which a plain `command = ...` beside it would
+// contradict).
+var ownedKey = regexp.MustCompile(`^[ \t]*(?:command|args|"command"|"args"|'command'|'args')[ \t]*[.=]`)
 
 // stripOwnedKeys drops the command and args assignments from one table's body,
 // a multi-line array value included, and returns what is left untouched.

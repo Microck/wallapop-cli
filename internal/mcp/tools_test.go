@@ -44,6 +44,7 @@ func TestStripOwnedKeysLeavesEverythingElseAlone(t *testing.T) {
 		{"bracket inside a string", "command = \"/opt/we[ird/wallapop\"\nstartup_timeout_sec = 30\n", "startup_timeout_sec = 30\n"},
 		{"comment after the value", "args = [\"mcp\"] # set by the installer\nenabled = true\n", "enabled = true\n"},
 		{"nothing owned", "enabled = true\n# a note\n", "enabled = true\n# a note\n"},
+		{"owned key as a dotted table", "command.path = \"old\"\nargs.extra = 1\nenabled = true\n", "enabled = true\n"},
 		{"key name inside a multi-line string", "note = \"\"\"\ncommand = \"not a key\"\n\"\"\"\nenabled = true\n", "note = \"\"\"\ncommand = \"not a key\"\n\"\"\"\nenabled = true\n"},
 	}
 	for _, tc := range cases {
