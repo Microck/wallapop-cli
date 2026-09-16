@@ -62,6 +62,8 @@ type Conversation struct {
 	Unread   int
 	Archived bool
 	Messages []Message
+	// MessagePageSize limits embedded and archived pages; zero preserves all messages.
+	MessagePageSize int
 }
 
 type Message struct {
@@ -70,6 +72,8 @@ type Message struct {
 	Text      string
 	At        time.Time
 	TimeToken string
+	Type      string
+	Payload   json.RawMessage
 }
 
 // Published is one PubNub publish the fake received.
@@ -92,13 +96,19 @@ type Server struct {
 	*httptest.Server
 	mu sync.Mutex
 
-	Items         map[string]*Item
-	SearchOrder   []string // hashes returned by search, in order; 40 per page
-	Favorites     map[string]bool
-	Conversations map[string]*Conversation
-	Published     []Published
-	Actions       []map[string]any // message actions (seen/received)
-	Requests      []Request
+	Items              map[string]*Item
+	SearchOrder        []string // hashes returned by search, in order; 40 per page
+	Favorites          map[string]bool
+	Conversations      map[string]*Conversation
+	Published          []Published
+	Actions            []map[string]any // message actions (seen/received)
+	Requests           []Request
+	Offers             map[string]*Offer
+	OfferRestrictions  OfferRestrictions
+	OfferDetailsStatus map[string]int // per-offer HTTP failure; zero serves current details
+	// SubscribeMessages replaces the text batch after the usual handshake and action.
+	// Nil preserves the recorded default stream; entries are complete PubNub envelopes.
+	SubscribeMessages []json.RawMessage
 
 	// Failure knobs.
 	BlockNextAPI  bool // next api.wallapop.com request gets a CloudFront 403
@@ -115,9 +125,11 @@ type Server struct {
 
 func New() *Server {
 	s := &Server{
-		Items:         map[string]*Item{},
-		Favorites:     map[string]bool{},
-		Conversations: map[string]*Conversation{},
+		Items:             map[string]*Item{},
+		Favorites:         map[string]bool{},
+		Conversations:     map[string]*Conversation{},
+		Offers:            map[string]*Offer{},
+		OfferRestrictions: OfferRestrictions{MaxOffersPerDay: 10, RemainingOffersPerDay: 8, MaxOfferPercentage: 30},
 	}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.handle))
 	return s
@@ -205,6 +217,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	p := r.URL.Path
 	switch {
+	case strings.HasPrefix(p, "/api/v3/delivery/"), p == "/bff/delivery/make-an-offer", p == "/bff/delivery/offer-details":
+		s.deliveryOffers(w, r)
 	case p == "/api/auth/session":
 		s.session(w, r)
 	case p == "/api/v3/search":
@@ -269,10 +283,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(p, "/bff/messaging/conversation/"):
 		s.conversation(w, r)
 	case strings.HasPrefix(p, "/api/v3/instant-messaging/archive/conversation/"):
-		if !s.authed(w, r) {
-			return
-		}
-		writeJSON(w, 200, map[string]any{"messages": []any{}, "next_from": ""})
+		s.olderMessages(w, r)
 	case p == "/api/v3/instant-messaging/token":
 		if !s.authed(w, r) {
 			return
@@ -641,21 +652,17 @@ func (s *Server) convJSON(c *Conversation) map[string]any {
 	if it != nil {
 		title, price, slug = it.Title, it.Price, it.Slug
 	}
-	var msgs []map[string]any
-	// Newest first, as the BFF does.
-	for i := len(c.Messages) - 1; i >= 0; i-- {
-		m := c.Messages[i]
-		msgs = append(msgs, map[string]any{"id": m.ID, "from_self": m.FromSelf, "text": m.Text, "timestamp": m.At.UnixMilli(), "status": "read", "type": "text", "time_token": m.TimeToken})
-	}
-	if msgs == nil {
-		msgs = []map[string]any{}
+	msgs, next := messagePage(c, len(c.Messages), c.MessagePageSize)
+	seller, buyer := c.Other, UserHash
+	if it != nil && it.Seller == UserHash {
+		seller, buyer = UserHash, c.Other
 	}
 	return map[string]any{
 		"hash":            c.Hash,
-		"sale":            map[string]any{"seller": map[string]string{"hash": c.Other}, "buyer": map[string]string{"hash": UserHash}},
+		"sale":            map[string]any{"seller": map[string]string{"hash": seller}, "buyer": map[string]string{"hash": buyer}},
 		"with_user":       map[string]any{"hash": c.Other, "name": "Other Seller", "slug": "other-seller-68037934", "available": true, "blocked": false, "rating_average": 4.9, "reviews_count": 97},
-		"item":            map[string]any{"hash": c.Item, "title": title, "status": "published", "price": map[string]any{"amount": price, "currency": "EUR"}, "slug": slug, "is_mine": false},
-		"messages":        map[string]any{"messages": msgs, "next_from": ""},
+		"item":            map[string]any{"hash": c.Item, "title": title, "status": "published", "price": map[string]any{"amount": price, "currency": "EUR"}, "slug": slug, "is_mine": it != nil && it.Seller == UserHash},
+		"messages":        map[string]any{"messages": msgs, "next_from": next},
 		"unread_messages": c.Unread, "channel": c.Channel, "translatable": false, "topic_id": "", "items_count": 1,
 	}
 }
@@ -813,6 +820,13 @@ func (s *Server) subscribe(w http.ResponseWriter, r *http.Request) {
 			}},
 		})
 	case subActionTT:
+		s.mu.Lock()
+		custom := s.SubscribeMessages
+		s.mu.Unlock()
+		if custom != nil {
+			writeJSON(w, 200, map[string]any{"t": map[string]any{"t": subMessageTT, "r": 41}, "m": custom})
+			return
+		}
 		writeJSON(w, 200, map[string]any{
 			"t": map[string]any{"t": subMessageTT, "r": 41},
 			"m": []map[string]any{{

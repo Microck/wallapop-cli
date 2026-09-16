@@ -1,0 +1,9 @@
+# Send and decline offers, defer accepting
+
+On 2026-09-16 the owner reversed the blanket exclusion of offers in `cli-spec.md` §13 and `spec-wallapop-cli-v1.md`. Price negotiation belongs in chat, so the CLI now sends buyer offers, declines incoming offers as the seller, and displays their current amount, currency and state. [Issue #22 and its revised scope](https://github.com/Microck/wallapop-cli/issues/22#issuecomment-5697525125) record that decision.
+
+Discovery showed that offers are part of Wallapop's delivery product, not an independent chat message type. Their writes use `/api/v3/delivery/...`; notifications are nested `server-message` payloads. The accepting branch leads into delivery checkout and the payments API. The owner therefore narrowed approval to sending and declining. Accepting needs its own ticket and explicit approval; no accept method, command or arbitrary status setter is implemented. Counter-offers, wallet, shipping execution and payments remain outside this change. MCP does not expose offer sending.
+
+The implementation reads current restrictions before a send and checks the daily allowance and price floor without writing. Decline checks the newest linked offer's current state, Item and Buyer rather than trusting localized chat text. Status cards provide current state, including accepted or expired offers created elsewhere, but displaying a state never enables its corresponding write.
+
+Safe live verification used only the owner's two Profiles, their existing Conversation and their EUR 1 test Item. Sending EUR 0.85 returned HTTP 201; declining returned HTTP 200. Both third-voice notifications were recorded. No accept or payment action was performed. Sanitized wire shapes and the CLI contract are in [the chat specification](../cli-spec.md#recorded-offer-shapes-2026-09-16).

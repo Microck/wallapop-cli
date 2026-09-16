@@ -149,8 +149,8 @@ detail with the page flags.
 ### chat
 
 Conversation argument: conversation hash, unique prefix of it, or an Item hash the account
-already has a Conversation about. Every endpoint below, including the writes and the PubNub
-publish, was exercised live against the owner's test account on 2026-09-14.
+already has a Conversation about. Text chat endpoints were exercised live against the owner's
+test account on 2026-09-14; offer send, decline and receive were recorded on 2026-09-16.
 
 - `chat list [--unread] [--archived] [--limit N]` from `GET /bff/messaging/inbox`
   (`page_size`, `max_messages`, `from=<next_from>`) or `GET /bff/messaging/archived`.
@@ -173,7 +173,7 @@ publish, was exercised live against the owner's test account on 2026-09-14.
   stdin to send. `/quit` or Ctrl-D exits. No TUI. Messages arriving during the session are
   marked seen as they land, the way opening the Conversation marks what was already there.
 
-  The inbox delivery is a forwarded copy, recorded live 2026-09-16 between the owner's two
+  Text message inbox delivery is a forwarded copy, recorded live 2026-09-16 between the owner's two
   accounts. Its envelope carries `u.original_time_token` and `u.original_channel`, which are
   the Message's identity on its own Conversation channel, and the envelope's own `p.t` is a
   few milliseconds later. The REST Message list and the `seen`/`received` actions both key off
@@ -191,6 +191,65 @@ publish, was exercised live against the owner's test account on 2026-09-14.
   minutes refreshed at 11 minutes and kept receiving afterwards.
 - `chat archive CONV [--undo]`: `PUT /api/v3/instant-messaging/conversations/archive`
   `{conversation_ids:[hash]}` (bundle), `unarchive` for `--undo`. 409 counts as success.
+- `chat offer CONV AMOUNT`: sends one buyer offer in the Item's currency. AMOUNT is a
+  positive decimal with at most two fractional digits. The CLI reads
+  `GET /bff/delivery/make-an-offer?item_id=HASH` and rejects an exhausted daily allowance,
+  a price below the reported floor, a price above asking, or the caller's own Item with exit 2
+  before any offer write. The floor is asking price less `max_offer_percentage`, rounded to
+  cents. A missing restriction or price is an API-changed error, not permission to send.
+  `POST /api/v3/delivery/buyer/offers` sends
+  `{offer_id:<client UUID>,offer_price_amount,offer_price_currency,item_ids:[HASH]}` and
+  answers **201 with an empty body**.
+- `chat offer decline CONV`: seller-only. Find the newest linked offer, paging older Messages
+  when necessary, refresh its status card, verify its Item and Buyer match the Conversation,
+  and require `PENDING`. Never fall back to an older pending offer when the latest is terminal.
+  `PATCH /api/v3/delivery/offers/{offer_id}/status` with `{"status":"DECLINED"}` answers
+  **200 with an empty body**. No accept or counter-offer command exists.
+
+#### Recorded offer shapes, 2026-09-16
+
+Delivery calls require bearer auth, `X-DeviceOS: 0` and `X-AppVersion: 0`. The terms read on
+the owner's EUR 1 Item returned the following relevant fields. Names and identifiers in
+the examples and fixtures are sanitized; omitted card UI fields are not used by the CLI.
+
+```json
+{"restriction":{"max_offers_per_day":10,"remaining_offers_per_day":8,"max_offer_percentage":30},"item":{"title":"Test item","price":{"amount":1.00,"currency":"EUR"}},"items_price":{"amount":1.00,"currency":"EUR"},"offer":null,"suggested_offers":[]}
+```
+
+This means a EUR 0.70 minimum, not a 30-percent-of-asking minimum. A new EUR 0.85 offer was
+sent by the owner's buyer Profile, received on the seller's PubNub subscription, then
+declined by the owner's seller Profile. The prior pending EUR 0.90 test offer was declined
+first. The writes returned 201 and 200 respectively. A subsequent buyer-side `chat show
+--no-mark-read` displayed EUR 0.85 as declined. Neither accept nor payment was called.
+
+Offers arrive with PubNub `u.type: "server-message"`, not a new offer meta type:
+
+```json
+{"u":{"type":"server-message","date":1789593225517,"to_user_hash":"SELLER","from_user_hash":"BUYER","conversation_hash":"CONV"},"d":{"id":"MESSAGE_UUID","payload":{"payload":"{\"text\":\"Buyer ha hecho una oferta de 0,85€.\",\"type\":\"delivery\",\"actionURL\":\"/delivery/CONV\",\"buttons\":[{\"loc-key\":\"chat_buyer_all_all_third_voice_button\",\"loc-value\":\"Ver\",\"action\":\"https://wallapop.com/app/chat/offer/11111111-1111-4111-8111-111111111111\"}],\"enrichedPayload\":null}"}}}
+```
+
+The decline payload has the same shape and link, with text `Has rechazado la oferta.`.
+These two observed envelopes had **no** `original_time_token` or `original_channel`;
+the CLI displays them but does not invent a channel for a live read receipt. Text Messages
+continue to use their original identity. The complete sanitized envelopes are in
+`internal/fakewallapop/testdata/offer-events.json`, served by the fake in regression cases.
+
+The messaging BFF uses `type: "delivery_generic"`, with the inner JSON string directly in
+`payload`; it also copies the localized sentence into `text`. The button link carries the
+offer UUID. `GET /bff/delivery/offer-details?offer_id=UUID` supplies machine-readable values:
+
+```json
+{"offer_status":{"title":"You received an offer!"},"offer_analytics":{"item_id":"ITEM","offer_id":"11111111-1111-4111-8111-111111111111","offer_price":{"amount":0.85,"currency":"EUR"},"offer_status":"PENDING","buyer_user_id":"BUYER"}}
+```
+
+After decline, `offer_status` in `offer_analytics` is `DECLINED`. List, show and live output
+attach this **current** card as `message.offer` with `amount`, `currency` and `status`;
+older Messages about the same offer therefore show its current state, not a reconstructed
+historical state. Accepted and expired states are displayed when returned, without an
+accept action. Original text, type, payload, identity and `offer_id` remain available in JSON.
+If a card cannot be read, retain the Message and expose `offer_error`; pretty output labels
+the missing details. Unknown Message types are printed with their type and retained payload
+rather than discarded. PubNub action envelopes remain excluded.
 
 Not exposed: block/unblock, phone sharing, translation.
 
@@ -425,8 +484,11 @@ wallapop chat open 8f1c2
 ## 13. Not in v1
 
 Email+password login, creating or editing Items (image upload), Wallapop server-side saved searches (v2, read-only),
-offers and anything touching wallet, shipping or payments (never), settings edits (never),
+accepting offers (deferred to a separately approved ticket), wallet, shipping execution or payments (never), settings edits (never),
 MCP server (v2), AUR/npm/Mintlify docs (after first stable release), Windows service install.
+
+Sending and declining price offers are in scope despite their delivery API paths. Accepting
+enters the delivery checkout flow and remains absent; see [ADR 0002](adr/0002-offers.md).
 
 ## 14. Stack
 

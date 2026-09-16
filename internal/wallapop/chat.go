@@ -2,8 +2,10 @@ package wallapop
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"time"
 )
@@ -39,17 +41,68 @@ type rawConversation struct {
 }
 
 type rawMessage struct {
-	ID        string `json:"id"`
-	FromSelf  bool   `json:"from_self"`
-	Text      string `json:"text"`
-	Timestamp msTime `json:"timestamp"`
-	Status    string `json:"status"`
-	Type      string `json:"type"`
-	TimeToken string `json:"time_token"`
+	ID        string          `json:"id"`
+	FromSelf  bool            `json:"from_self"`
+	Text      string          `json:"text"`
+	Timestamp msTime          `json:"timestamp"`
+	Status    string          `json:"status"`
+	Type      string          `json:"type"`
+	TimeToken string          `json:"time_token"`
+	Payload   json.RawMessage `json:"payload"`
 }
 
 func (m rawMessage) normalize() Message {
-	return Message{ID: m.ID, FromSelf: m.FromSelf, Text: m.Text, At: m.Timestamp.Time, Status: m.Status, Type: m.Type, TimeToken: m.TimeToken}
+	msg := Message{ID: m.ID, FromSelf: m.FromSelf, Text: m.Text, At: m.Timestamp.Time, Status: m.Status, Type: m.Type, TimeToken: m.TimeToken}
+	msg.decodePayload(m.Payload)
+	return msg
+}
+
+var offerLinkRE = regexp.MustCompile(`/chat/offer/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:[/?#]|$)`)
+
+// REST wraps third-voice payloads in a JSON string; PubNub adds an object
+// containing that same string. Keep opaque payloads for future message types.
+func (m *Message) decodePayload(raw json.RawMessage) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return
+	}
+	m.Payload = raw
+	var encoded string
+	if json.Unmarshal(raw, &encoded) == nil {
+		raw = json.RawMessage(encoded)
+	}
+	var payload struct {
+		Text      string          `json:"text"`
+		Type      string          `json:"type"`
+		Payload   json.RawMessage `json:"payload"`
+		ActionURL string          `json:"actionURL"`
+		Buttons   []struct {
+			Action string `json:"action"`
+		} `json:"buttons"`
+	}
+	if json.Unmarshal(raw, &payload) != nil {
+		return
+	}
+	if len(payload.Payload) > 0 {
+		original := m.Payload
+		m.decodePayload(payload.Payload)
+		m.Payload = original
+	}
+	if m.Text == "" {
+		m.Text = payload.Text
+	}
+	if m.Kind == "" {
+		m.Kind = payload.Type
+	}
+	links := []string{payload.ActionURL}
+	for _, button := range payload.Buttons {
+		links = append(links, button.Action)
+	}
+	for _, link := range links {
+		if match := offerLinkRE.FindStringSubmatch(link); match != nil {
+			m.OfferID = match[1]
+			break
+		}
+	}
 }
 
 func (c *Client) normalizeConversation(r rawConversation) Conversation {
@@ -107,6 +160,7 @@ func (c *Client) Inbox(ctx context.Context, archived bool, pageSize, maxMessages
 	out := Inbox{UserHash: raw.UserHash, Unread: raw.UnreadMessages, NextFrom: raw.NextFrom}
 	for _, r := range raw.Conversations {
 		conv := c.normalizeConversation(r)
+		c.HydrateOffers(ctx, conv.Messages)
 		conv.Archived = archived
 		out.Conversations = append(out.Conversations, conv)
 	}
@@ -122,7 +176,9 @@ func (c *Client) Conversation(ctx context.Context, hash string) (Conversation, e
 	if raw.Hash == "" {
 		return Conversation{}, &Error{Kind: KindAPIChanged, Endpoint: "GET /bff/messaging/conversation/{hash}", Msg: "conversation came back without a hash"}
 	}
-	return c.normalizeConversation(raw), nil
+	conv := c.normalizeConversation(raw)
+	c.HydrateOffers(ctx, conv.Messages)
+	return conv, nil
 }
 
 // OlderMessages pages backwards from a conversation's next_from cursor.
@@ -143,6 +199,7 @@ func (c *Client) OlderMessages(ctx context.Context, hash, from string, max int) 
 	for i := len(raw.Messages) - 1; i >= 0; i-- {
 		out = append(out, raw.Messages[i].normalize())
 	}
+	c.HydrateOffers(ctx, out)
 	return out, raw.NextFrom, nil
 }
 
