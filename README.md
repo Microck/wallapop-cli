@@ -146,9 +146,10 @@ make check     # vet, staticcheck, tests, gofmt
 
 ## documentation
 
-full docs live at **[wallapop.micr.dev](https://wallapop.micr.dev)**: install, the cookie export
-walkthrough, the command reference generated from the binary, exit codes, sinks and scheduling.
-the site source is in [docs-site](docs-site) and is not deployed yet.
+full docs live at **[wallapop.micr.dev](https://wallapop.micr.dev)** (DNS pending; currently
+served at the Vercel production deployment): install, the cookie export walkthrough, the
+command reference generated from the binary, exit codes, sinks and scheduling.
+the site source is in [docs-site](docs-site).
 
 - [docs/cli-spec.md](docs/cli-spec.md): the interface contract and every endpoint the cli uses
 - [CONTEXT.md](CONTEXT.md): vocabulary

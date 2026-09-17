@@ -92,6 +92,8 @@ func (a *App) rootCmd() *cobra.Command {
 		Short: "Search, track and chat on Wallapop from the terminal",
 		Long: `Search, track and chat on Wallapop from the terminal, with your own account.
 
+Docs: https://wallapop.micr.dev
+
 Output is JSON by default so every command pipes into jq. Use --format pretty
 for humans. Errors go to stderr; exit codes are documented in docs/cli-spec.md.
 

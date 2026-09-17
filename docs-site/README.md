@@ -1,7 +1,7 @@
 # docs-site
 
-The documentation site for `wallapop-cli`, built with Fumadocs on Next.js. Intended to be
-deployed at `wallapop.micr.dev`; not deployed yet.
+The documentation site for `wallapop-cli`, built with Fumadocs on Next.js. Deployed on Vercel
+as `wallapop-cli`; the `wallapop.micr.dev` DNS record (Netlify NS1) is still missing.
 
 ```bash
 npm ci
