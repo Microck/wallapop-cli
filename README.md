@@ -29,9 +29,11 @@ curl -fsSL https://raw.githubusercontent.com/Microck/wallapop-cli/main/scripts/i
 # macos
 brew install Microck/tap/wallapop
 
-# windows
-scoop bucket add microck https://github.com/Microck/scoop-bucket
-scoop install wallapop
+# node
+npm install -g wallapop-cli
+
+# arch (aur)
+yay -S wallapop-cli-bin
 
 # anywhere with go
 go install github.com/Microck/wallapop-cli/cmd/wallapop@latest
