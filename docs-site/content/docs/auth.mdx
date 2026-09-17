@@ -20,6 +20,8 @@ keeps it alive on its own.
 
 Any extension that exports Netscape-format cookies works. Cookie-Editor and "Get cookies.txt"
 are the common ones.
+
+![Cookie-Editor homepage, showing the supported browsers and the import/export feature](/auth/cookie-editor-home.png)
 </Step>
 
 <Step>
@@ -33,6 +35,8 @@ Go to `es.wallapop.com` and sign in normally, however you usually do.
 
 Export for `wallapop.com` and save the file. You need `__Secure-next-auth.session-token`; the
 CLI also picks up `device_id` if it is there.
+
+![Cookie-Editor feature list with the import and export option](/auth/cookie-editor-export.png)
 
 <Callout type="warn" title="Cookie-Editor exports JSON by default">
   The CLI reads Netscape format, pasted `name=value` pairs, or a bare cookie value. If your
