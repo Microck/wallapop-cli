@@ -2,9 +2,9 @@
 title: Install
 description: Get the binary on macOS, Linux or Windows.
 ---
-<Callout type="info" title="macOS and Windows paths pending">
-  The Linux paths below are verified; macOS and Windows install paths are being tested and
-  will be added as soon as they are confirmed.
+<Callout type="info" title="Version 0.1.0">
+  Every path below was verified against the v0.1.0 release and prints `wallapop 0.1.0`.
+  Each release also ships `checksums.txt` with a GitHub provenance attestation.
 </Callout>
 
 ## Installer
@@ -15,8 +15,40 @@ Installs the latest release into `~/.local/bin` (override with `WALLAPOP_INSTALL
 curl -fsSL https://raw.githubusercontent.com/Microck/wallapop-cli/main/scripts/install.sh | sh
 ```
 
-The installer picks the right archive for your platform, verifies the checksum and installs the
-binary. Linux amd64 and arm64 are verified.
+## Homebrew
+
+```bash
+brew install Microck/tap/wallapop
+wallapop --version
+```
+
+## Scoop
+
+```powershell
+scoop bucket add microck https://github.com/Microck/scoop-bucket
+scoop install microck/wallapop
+wallapop --version
+```
+
+## npm
+
+```bash
+npm install -g wallapop-cli
+wallapop --version
+```
+
+The postinstall step downloads the matching release archive for your platform, checks its
+SHA-256 against `checksums.txt`, and installs the binary.
+
+## Arch Linux
+
+```bash
+yay -S wallapop-cli-bin
+wallapop --version
+```
+
+The installer picks the right archive for your platform (Linux amd64 and arm64 are covered),
+verifies the checksum and installs the binary.
 
 ## Go install
 
