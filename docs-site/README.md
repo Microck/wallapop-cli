@@ -28,7 +28,7 @@ make docs-check  # what CI runs: regenerate and fail if anything moved
 
 ## Theme
 
-Wallapop's palette is one accent on black and white: `#13C1AC`, `#000000`, `#FFFFFF`. The site
-is dark by default on a true black ground, with the teal used only for interactive elements. In
-light mode the accent is darkened to `#0B7D6F`, since the brand teal on white fails contrast at
-body size.
+Wallapop's accents on black and white: `#385EF9` blue, `#0B2DB0` dark blue, `#13C1AC`
+teal. The site is dark by default on a true black ground, with blue for interactive
+elements. Light mode darkens the blue to `#0B2DB0`, since the brand blue on white is too
+weak for body-sized text.

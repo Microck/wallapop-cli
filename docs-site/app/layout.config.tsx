@@ -1,6 +1,6 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
 
-// The mark is the brand teal on the page ground, no wordmark image, so the
+// The mark is the brand blue on the page ground, no wordmark image, so the
 // header stays legible at any size and needs no asset pipeline.
 export const baseOptions: BaseLayoutProps = {
   nav: {
@@ -9,7 +9,7 @@ export const baseOptions: BaseLayoutProps = {
         <span
           aria-hidden
           className="inline-block size-3 rounded-[3px]"
-          style={{ backgroundColor: '#13C1AC' }}
+          style={{ backgroundColor: '#385EF9' }}
         />
         wallapop-cli
       </span>
