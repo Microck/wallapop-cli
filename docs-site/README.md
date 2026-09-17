@@ -28,7 +28,6 @@ make docs-check  # what CI runs: regenerate and fail if anything moved
 
 ## Theme
 
-Wallapop's accents on black and white: `#385EF9` blue, `#0B2DB0` dark blue, `#13C1AC`
-teal. The site is dark by default on a true black ground, with blue for interactive
-elements. Light mode darkens the blue to `#0B2DB0`, since the brand blue on white is too
-weak for body-sized text.
+The tokens follow Wallapop's own dark theme: page ground `#0B0B0C`, sidebar `#151617`,
+text `#FBFBF9`, dimmed text `#8E8E8B`, accent blue `#385EF9`. Light mode uses the
+light-side tokens (`#FFFFFF` ground, `#29363D` text, `#0B2DB0` dark blue accent).
