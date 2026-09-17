@@ -49,6 +49,28 @@ wallapop chat list [flags]
 | `--limit` | int | `30` | how many conversations |
 | `--unread` | bool | `false` | only conversations with unread messages |
 
+## `wallapop chat offer`
+
+Send a price offer, or decline an incoming offer
+
+```bash
+wallapop chat offer CONV AMOUNT
+```
+
+Send a buyer offer in the item's currency. AMOUNT is a positive decimal
+with at most two fractional digits. Wallapop's daily cap and minimum price
+are checked before sending. Decline the latest incoming offer with:
+  wallapop chat offer decline CONV
+Accepting is not supported: it belongs to Wallapop's delivery checkout flow.
+
+### `wallapop chat offer decline`
+
+Decline the latest incoming price offer
+
+```bash
+wallapop chat offer decline CONV
+```
+
 ## `wallapop chat open`
 
 Line-mode chat: streams incoming messages, sends what you type
