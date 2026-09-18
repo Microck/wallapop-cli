@@ -28,6 +28,7 @@ make docs-check  # what CI runs: regenerate and fail if anything moved
 
 ## Theme
 
-The tokens follow Wallapop's own dark theme: page ground `#0B0B0C`, sidebar `#151617`,
-text `#FBFBF9`, dimmed text `#8E8E8B`, accent blue `#385EF9`. Light mode uses the
-light-side tokens (`#FFFFFF` ground, `#29363D` text, `#0B2DB0` dark blue accent).
+Brand scale `--brand-50` through `--brand-950` with logo `#14C1AD` at 500. Light
+mode is mint (`#F7FCFB` page, `#FFFFFF` cards, `#10201E` text, `#0E9E8E` primary).
+Dark mode is deep green (`#071411` page, `#0C1F1B` cards, `#EAFBF8` text,
+`#14C1AD` primary, `#74E1D5` focus ring).
