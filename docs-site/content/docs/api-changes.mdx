@@ -6,9 +6,9 @@ description: Why the CLI fails loudly instead of quietly returning nothing.
 Wallapop publishes no API. Everything here talks to the endpoints the website uses, recorded by
 watching the site work. Those endpoints change without notice.
 
-The choice this CLI makes is to fail loudly. A search that silently returns zero results because
-a field moved is worse than a search that stops and says so, because the quiet one costs you the
-listing you were waiting for.
+The choice this CLI makes is to fail loudly. A search that returns zero results because
+a field moved costs you the listing you were waiting for. A search that stops and says so
+costs you a retry.
 
 ## What it looks like
 
@@ -33,8 +33,8 @@ prints.
 
 ## Telling failures apart
 
-Exit `7` means the endpoint answered and the answer was wrong-shaped. That is a code problem and
-worth reporting.
+Exit `7` means the endpoint answered and the answer was wrong-shaped. That is a code problem.
+Report it.
 
 Exit `5` means CloudFront blocked the request or you were rate limited. That is not an API
 change; wait and retry. The client retries once with a browser user agent on its own when
@@ -48,6 +48,5 @@ Exit `6` is the network. Retry.
 wallapop doctor
 ```
 
-`doctor` checks the config parses, the session mints, `api.wallapop.com` is reachable, the chat
-token can be fetched, and what the scheduler reports. Run it before filing anything: most
-surprises are an expired session rather than a changed API.
+`doctor` checks the config parses, the session mints, `api.wallapop.com` is reachable and the chat
+token is fetched. Run it before filing anything. Most surprises are an expired session, not a changed API.

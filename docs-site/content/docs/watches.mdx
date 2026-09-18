@@ -37,10 +37,11 @@ Event types are `item.new`, `item.price_changed`, `item.reserved`, `item.unreser
 }
 ```
 
-Event delivery to sinks is best-effort: a sink that fails is logged and the check still
-commits, so the event is not retried. What is guaranteed is the diff pipeline: state is
-committed after delivery is attempted, so a check that crashes before committing re-runs
-and re-reports what it saw; deduplicate on the event fields if that matters for your sink.
+Delivery to sinks is best-effort. A sink that fails is logged and the check still
+commits, so the event is not retried. The diff pipeline is guaranteed: the CLI commits
+state after delivery is attempted, so a check that crashes before committing re-runs
+and re-reports what it saw. Deduplicate on the event fields if that matters for your sink.
+
 ```bash
 wallapop watch events iphone --since 24h
 ```
@@ -87,6 +88,5 @@ wallapop sink test phone   # sends a synthetic event
 ```
 
 <Callout type="info" title="Test the sink before you rely on it">
-  `sink test` is the difference between a watch that is quietly failing to notify you and one
-  you can trust. Run it once when you add a sink.
+  Run `sink test` once when you add a sink, so you know the watch notifies you.
 </Callout>

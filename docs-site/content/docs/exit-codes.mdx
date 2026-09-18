@@ -27,7 +27,7 @@ if ! wallapop auth refresh; then
 fi
 ```
 
-Back off on the ones worth retrying and give up on the ones that are not:
+Back off on the retryable codes and stop on the rest:
 
 ```bash
 wallapop watch check --all
@@ -39,6 +39,6 @@ esac
 ```
 
 <Callout type="idea" title="Pair with the error envelope">
-  `--error-format json` gives you a stable `category` string next to the code, which is easier
-  to read than a number when you are logging failures. See [Output](/docs/output).
+  `--error-format json` prints a stable `category` string next to the code. Branch on that
+  when you log failures. See [Output](/docs/output).
 </Callout>

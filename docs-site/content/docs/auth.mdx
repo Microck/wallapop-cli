@@ -4,7 +4,7 @@ description: Export a browser cookie once, then stay logged in for about a month
 ---
 
 Wallapop has no password API worth using. Google, Apple, Facebook and password accounts all end
-up at the same place: a session cookie in your browser. The CLI imports that cookie and then
+up at the same place, a session cookie in your browser. The CLI imports that cookie and then
 keeps it alive on its own.
 
 <Callout type="idea" title="Why a cookie">
@@ -27,7 +27,7 @@ are the common ones.
 <Step>
 ### Log in to Wallapop in your browser
 
-Go to `es.wallapop.com` and sign in normally, however you usually do.
+Go to `es.wallapop.com` and sign in.
 </Step>
 
 <Step>
@@ -61,9 +61,9 @@ wallapop auth login
 </Step>
 </Steps>
 
-Login validates the session immediately and tells you who you are, so a bad export fails at once
+Login validates the session and tells you who you are, so a bad export fails at once
 rather than three commands later. It also saves your account's location as the default search
-location, so your first search already works.
+location. Your first search already works.
 
 ## Staying logged in
 
@@ -107,7 +107,7 @@ wallapop search "bici" --format jsonl
   </Folder>
 </Files>
 
-`credentials.toml` is kept separate from `config.toml` and written at mode `0600`, so sharing
+The CLI keeps `credentials.toml` separate from `config.toml` and writes it at mode `0600`, so sharing
 your config never leaks your session.
 
 ## Log out
