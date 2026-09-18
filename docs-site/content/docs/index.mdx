@@ -4,10 +4,10 @@ description: Drive Wallapop from the terminal. Search, listings, chat and watche
 ---
 
 Wallapop is a browser-and-app-only marketplace with no public API. `wallapop` is a single Go
-binary that logs in with your own account by importing your browser session, then exposes the
+binary that logs in with your own account by importing your browser session. It exposes the
 site's search, listing and chat features as noun-verb commands that print JSON.
 
-That makes the marketplace scriptable: you can pipe a search into `jq`, keep a watch running
+That makes the marketplace scriptable. Pipe a search into `jq`, keep a watch running
 from a systemd timer, or hand the whole thing to an agent.
 
 <Cards>
@@ -50,5 +50,5 @@ sellers, and stops there.
 <Callout type="warn" title="Unofficial">
   Wallapop publishes no API. This talks to the same endpoints the website uses, so it can break
   when they change something. When that happens the CLI fails loudly with a prefilled issue link
-  rather than quietly returning nothing. See [API changes](/docs/api-changes).
+  rather than returning nothing. See [API changes](/docs/api-changes).
 </Callout>

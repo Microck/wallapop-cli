@@ -14,28 +14,28 @@ wallapop search "bici" | jq '.items[0]'
 
 <Tabs items={['json', 'pretty', 'jsonl', 'toon']} id="format">
   <Tab value="json">
-    The default. One JSON document.
+    The default format prints one JSON document.
 
     ```bash
     wallapop search "bici"
     ```
   </Tab>
   <Tab value="pretty">
-    A compact table for reading in the terminal: hash, price, flags, title, city, URL.
+    It prints a compact table for reading in the terminal: hash, price, flags, title, city, URL.
 
     ```bash
     wallapop search "bici" --format pretty
     ```
   </Tab>
   <Tab value="jsonl">
-    One object per line, for streams and pipes. Use it for incoming chat messages or watch events.
+    It prints one object per line, for streams and pipes. Use it for incoming chat messages or watch events.
 
     ```bash
     wallapop chat open 8f1c2 --format jsonl
     ```
   </Tab>
   <Tab value="toon">
-    TOON output for language-model context.
+    It prints TOON output for language-model context.
 
     ```bash
     wallapop search "bici" --format toon

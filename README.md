@@ -14,10 +14,10 @@
 
 ## why
 
-- search once, keep the results: `watch` turns a search into a stream of events (new item, price drop, reserved, sold) and delivers them to ntfy, a webhook or a script
+- search once, keep the results: `watch` turns a search into a stream of events (new item, price drop, reserved, sold) and sends them to ntfy, a webhook or a script
 - talk to sellers without the browser: list, read, send, start new conversations, or stream a live chat in your terminal
-- every filter wallapop offers, including car brand, mileage and gearbox, validated against what the site currently accepts
-- one static binary, honest user agent, no analytics, no daemon: background checks run from systemd or launchd
+- every filter wallapop offers, including car brand, mileage and gearbox, checked against what the site currently accepts
+- one static binary, honest user agent, no analytics, no daemon. background checks run from systemd or launchd
 - built for scripts and agents: stable json, `jsonl` streaming, `toon` for llm context, typed exit codes, a json error envelope
 
 ## quickstart
@@ -48,13 +48,13 @@ gh attestation verify checksums.txt --repo Microck/wallapop-cli
 
 ### auth
 
-wallapop keeps your login in an http-only browser cookie, so the cli imports it instead of asking for a password. this works for password, google, apple and facebook accounts alike.
+wallapop keeps your login in an http-only browser cookie, so the cli imports it instead of asking for a password. password, google, apple and facebook accounts all work the same way.
 
 1. log in at es.wallapop.com in your browser
 2. export cookies as a netscape/text file with an extension such as cookie-editor, or copy the value of `__Secure-next-auth.session-token`
 3. run `wallapop auth login` and paste the file path or the value, or pass `--cookies FILE`
 
-the cli keeps only that cookie and your device id, in a 0600 file under `~/.config/wallapop-cli/`. it mints the short-lived access tokens itself, the same way the web does, and re-saves the cookie as wallapop rotates it. your account location becomes the default search centre.
+the cli keeps only that cookie and your device id, in a 0600 file under `~/.config/wallapop-cli/`. it mints short-lived access tokens itself, the same way the web does, and re-saves the cookie as wallapop rotates it. your account location becomes the default search centre.
 
 ## auth model
 
@@ -126,7 +126,7 @@ command = ["~/bin/on-wallapop-event"]   # event json on stdin
 
 ## exit codes
 
-`0` ok, `1` generic, `2` usage, `3` auth, `4` not found, `5` blocked or rate limited, `6` network, `7` wallapop changed its api (stderr carries a prefilled issue link), `130` interrupted.
+`0` ok, `1` generic, `2` usage, `3` auth, `4` not found, `5` blocked or rate limited, `6` network, `7` wallapop changed its api. stderr carries a prefilled issue link. `130` interrupted.
 
 ## shell completion
 
@@ -147,7 +147,7 @@ make check     # vet, staticcheck, tests, gofmt
 ## documentation
 
 full docs live at **[wallapop.micr.dev](https://wallapop.micr.dev)** (DNS pending; currently
-served at the Vercel production deployment): install, the cookie export walkthrough, the
+served at the Vercel production deployment). install, the cookie export walkthrough, the
 command reference generated from the binary, exit codes, sinks and scheduling.
 the site source is in [docs-site](docs-site).
 
@@ -157,11 +157,11 @@ the site source is in [docs-site](docs-site).
 
 ## contributing
 
-issues and pull requests are welcome. when wallapop changes something, the cli prints a prefilled issue link; that is the most useful report you can file.
+issues and pull requests are welcome. when wallapop changes something, the cli prints a prefilled issue link. that is the most useful report you can file.
 
 ## disclaimer
 
-this is an unofficial client. wallapop has no public api for buyers, and its terms of use prohibit bots, scraping and reverse engineering; the stated remedy is account suspension. use it with an account you are willing to lose, keep the check interval reasonable, and do not use it to spam sellers. not affiliated with wallapop.
+this is an unofficial client. wallapop has no public api for buyers, and its terms of use prohibit bots, scraping and reverse engineering. the stated remedy is account suspension. use it with an account you are willing to lose, keep the check interval reasonable, and do not use it to spam sellers. not affiliated with wallapop.
 
 ## license
 

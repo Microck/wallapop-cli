@@ -12,7 +12,7 @@ npm start    # serve the production build at http://localhost:3000/docs
 ```
 
 `npm ci` runs `fumadocs-mdx` through `postinstall` to generate the content types before
-typechecking or building. Node.js 22 is used in CI.
+typechecking or building. CI uses Node.js 22.
 
 ## Command reference
 

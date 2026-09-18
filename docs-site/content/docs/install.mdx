@@ -47,8 +47,7 @@ yay -S wallapop-cli-bin
 wallapop --version
 ```
 
-The installer picks the right archive for your platform (Linux amd64 and arm64 are covered),
-verifies the checksum and installs the binary.
+The package covers Linux amd64 and arm64, verifies the checksum and installs the binary.
 
 ## Go install
 
@@ -57,7 +56,6 @@ go install github.com/Microck/wallapop-cli/cmd/wallapop@v0.1.0
 wallapop --version
 ```
 
-
 ## Check it works
 
 ```bash
@@ -65,5 +63,5 @@ wallapop --version
 wallapop doctor
 ```
 
-`doctor` checks that the config parses, the session mints, Wallapop is reachable and the chat
-token can be fetched. Run it first whenever something behaves oddly.
+`doctor` checks that the config parses, the session mints, Wallapop is reachable and the CLI
+can fetch the chat token. Run it first whenever something behaves oddly.
