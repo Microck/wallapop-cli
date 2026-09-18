@@ -1,8 +1,6 @@
 <p align="center">
-  <img src=".github/assets/wallapop-cli-logo.svg" width="120" alt="wallapop cli logo">
+  <img src=".github/assets/wallapop-cli-logo.svg" width="720" alt="wallapop cli logo">
 </p>
-
-<h1 align="center">wallapop</h1>
 
 <p align="center">
   <a href="https://github.com/Microck/wallapop-cli/releases"><img src="https://img.shields.io/github/v/release/Microck/wallapop-cli?display_name=tag&style=flat-square&label=release&color=000000" alt="release badge"></a>
@@ -19,11 +17,7 @@
 
 ## why
 
-- search once, keep the results. `watch` turns a search into a stream of events (new item, price drop, reserved, sold) and sends them to ntfy, a webhook, or a script
-- talk to sellers without the browser. list, read, send, start new conversations, or stream a live chat in your terminal
-- every filter wallapop offers, including car brand, mileage, and gearbox. the cli checks them against what the site currently accepts
-- one static Go binary, honest user agent, no analytics, no daemon. background checks run from systemd or launchd
-- built for scripts and agents. stable json, `jsonl` streaming, `toon` for llm context, typed exit codes, a json error envelope
+if you already use wallapop and want it in the terminal, this cli gives you a practical path without the browser. search once and keep the results as a stream of events, talk to sellers from your own account, and use every filter the site offers, all from one static binary with no daemon. output is json by default, so scripts, agents, and shell pipelines all read the same thing.
 
 ## quickstart
 
