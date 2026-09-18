@@ -4,47 +4,62 @@
 
 @source '../node_modules/fumadocs-ui/dist/**/*.js';
 
-/*
- * Wallapop dark theme, from the live site's own tokens: page ground #0B0B0C,
- * sidebar #151617, header text #FBFBF9, body text #29363D light / #FBFBF9 dark,
- * dimmed text #5C7A89 light / #8E8E8B dark, accent blue #385EF9 with dark ink
- * #0B2DB0 for light-mode body text.
- */
 @theme {
-  --wallapop-blue: #385ef9;
-  --wallapop-blue-ink: #0b2db0;
+  --brand-50: #e9fbf8;
+  --brand-100: #d0f7f2;
+  --brand-200: #a5eee6;
+  --brand-300: #74e1d5;
+  --brand-400: #3dd0c0;
+  --brand-500: #14c1ad;
+  --brand-600: #0e9e8e;
+  --brand-700: #0d7e72;
+  --brand-800: #10645c;
+  --brand-900: #11534d;
+  --brand-950: #062f2b;
 }
 
 :root {
-  --color-fd-background: #ffffff;
-  --color-fd-foreground: #29363d;
-  --color-fd-card: #f0f3f5;
+  color-scheme: light;
+
+  --color-fd-background: #f7fcfb;
+  --color-fd-foreground: #10201e;
+  --color-fd-card: #ffffff;
   --color-fd-popover: #ffffff;
-  --color-fd-muted: #f0f3f5;
-  --color-fd-muted-foreground: #5c7a89;
-  --color-fd-border: #d1dbe0;
-  --color-fd-accent: #e8eefe;
-  --color-fd-accent-foreground: var(--wallapop-blue-ink);
-  --color-fd-primary: var(--wallapop-blue-ink);
+  --color-fd-muted: #eaf8f6;
+  --color-fd-muted-foreground: #526b66;
+  --color-fd-border: #cfe6e2;
+  --color-fd-accent: #dcf3ef;
+  --color-fd-accent-foreground: #0d7e72;
+  --color-fd-primary: #0e9e8e;
   --color-fd-primary-foreground: #ffffff;
-  --color-fd-ring: var(--wallapop-blue-ink);
-  --color-fd-secondary: #f0f3f5;
+  --color-fd-ring: #0e9e8e;
+  --color-fd-secondary: #eaf8f6;
 }
 
 .dark {
-  --color-fd-background: #0b0b0c;
-  --color-fd-foreground: #fbfbf9;
-  --color-fd-card: #151617;
-  --color-fd-popover: #151617;
-  --color-fd-muted: #151617;
-  --color-fd-muted-foreground: #8e8e8b;
-  --color-fd-border: #222325;
-  --color-fd-accent: #0a1247;
-  --color-fd-accent-foreground: #99b6fc;
-  --color-fd-primary: var(--wallapop-blue);
-  --color-fd-primary-foreground: #ffffff;
-  --color-fd-ring: var(--wallapop-blue);
-  --color-fd-secondary: #222325;
+  color-scheme: dark;
+
+  --color-fd-background: #071411;
+  --color-fd-foreground: #eafbf8;
+  --color-fd-card: #0c1f1b;
+  --color-fd-popover: #0c1f1b;
+  --color-fd-muted: #0c1f1b;
+  --color-fd-muted-foreground: #b4cdc8;
+  --color-fd-border: #23443e;
+  --color-fd-accent: #183c34;
+  --color-fd-accent-foreground: #74e1d5;
+  --color-fd-primary: #14c1ad;
+  --color-fd-primary-foreground: #04110f;
+  --color-fd-ring: #74e1d5;
+  --color-fd-secondary: #123029;
+}
+
+::selection {
+  background-color: rgb(20 193 173 / 22%);
+}
+
+.dark ::selection {
+  background-color: rgb(20 193 173 / 30%);
 }
 
 .prose {
@@ -60,13 +75,13 @@
 }
 
 #nd-sidebar {
-  background-color: #f0f3f5;
+  background-color: #ffffff;
   border-color: transparent;
 }
 
 .dark #nd-sidebar {
-  --color-fd-muted-foreground: #8e8e8b;
-  background-color: #151617;
+  --color-fd-muted-foreground: #b4cdc8;
+  background-color: #0c1f1b;
 }
 
 @layer utilities {

@@ -9,7 +9,7 @@ export const baseOptions: BaseLayoutProps = {
         <span
           aria-hidden
           className="inline-block size-3 rounded-[3px]"
-          style={{ backgroundColor: '#385EF9' }}
+          style={{ backgroundColor: '#14C1AD' }}
         />
         wallapop-cli
       </span>
