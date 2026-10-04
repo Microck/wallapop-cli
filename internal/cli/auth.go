@@ -87,13 +87,16 @@ Examples:
 				deviceID = wallapop.NewDeviceID()
 			}
 			// Validate by minting once and reading the profile.
-			a.Session = wallapop.NewSession(a.Client, cookie, deviceID)
-			a.Client.Tokens = a.Session
+			if !a.managedLogin(cookie, deviceID) {
+				a.Session = wallapop.NewSession(a.Client, cookie, deviceID)
+				a.Client.Tokens = a.Session
+			}
 			me, err := a.Client.Me(cmd.Context())
 			if err != nil {
 				return err
 			}
 			a.Creds.Profiles[a.Profile] = config.Session{
+				GalletonID:    a.managedID(),
 				SessionCookie: a.Session.Cookie, SessionExpires: a.Session.CookieExpires.UTC(), DeviceID: deviceID, UserHash: me.Hash, Name: me.Name, UpdatedAt: time.Now().UTC(),
 			}
 			if err := a.saveCreds(); err != nil {
@@ -118,7 +121,11 @@ Examples:
 					return err
 				}
 			}
-			return a.Printer.Print(authStatus{Profile: a.Profile, LoggedIn: true, Account: me.Name, UserHash: me.Hash, Source: "credentials", Location: a.Cfg.Profiles[a.Profile].Location})
+			source := "credentials"
+			if a.managed != nil {
+				source = "galleton"
+			}
+			return a.Printer.Print(authStatus{Profile: a.Profile, LoggedIn: true, Account: me.Name, UserHash: me.Hash, Source: source, GalletonID: a.managedID(), Location: a.Cfg.Profiles[a.Profile].Location})
 		},
 	}
 	cmd.Flags().StringVar(&cookiesFile, "cookies", "", "path to a Netscape cookie export")
@@ -133,6 +140,7 @@ type authStatus struct {
 	Account        string           `json:"account,omitempty"`
 	UserHash       string           `json:"user_hash,omitempty"`
 	Source         string           `json:"source,omitempty"`
+	GalletonID     string           `json:"galleton_id,omitempty"`
 	UpdatedAt      *time.Time       `json:"updated_at,omitempty"`
 	SessionExpires *time.Time       `json:"session_expires,omitempty"`
 	Location       *config.Location `json:"location,omitempty"`
@@ -145,6 +153,9 @@ func (s authStatus) Pretty(w io.Writer, color bool) {
 		rows = append(rows, []string{"session", "none (run `wallapop auth login`)"})
 	} else {
 		rows = append(rows, []string{"account", s.Account + " " + output.Dim(s.UserHash, color)}, []string{"source", s.Source})
+		if s.GalletonID != "" {
+			rows = append(rows, []string{"galleton", s.GalletonID})
+		}
 		if s.UpdatedAt != nil {
 			rows = append(rows, []string{"updated", s.UpdatedAt.Local().Format(time.RFC3339)})
 		}
@@ -200,6 +211,10 @@ func (a *App) currentStatus() authStatus {
 	} else if s, ok := a.Creds.Profiles[a.Profile]; ok {
 		st.LoggedIn, st.Source, st.Account, st.UserHash = true, "credentials", s.Name, s.UserHash
 		st.UpdatedAt, st.SessionExpires = timePtr(s.UpdatedAt), timePtr(s.SessionExpires)
+		if s.GalletonID != "" {
+			st.Source, st.GalletonID = "galleton", s.GalletonID
+			st.SessionExpires = nil // Galleton does not expose the cookie expiry.
+		}
 	}
 	return st
 }
@@ -227,8 +242,8 @@ on its own; this command is for people who schedule with cron instead of
 			if err := a.requireSession(); err != nil {
 				return err
 			}
-			// A fresh process has no cached token, so this always mints once.
-			if _, err := a.Session.AccessToken(cmd.Context()); err != nil {
+			// Explicitly refresh in the daemon, even when it has a cached token.
+			if err := a.refreshSession(cmd.Context()); err != nil {
 				return err
 			}
 			return a.Printer.Print(a.currentStatus())
@@ -244,6 +259,9 @@ func (a *App) authLogoutCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, ok := a.Creds.Profiles[a.Profile]; !ok {
 				return a.Printer.Print(authStatus{Profile: a.Profile})
+			}
+			if err := a.forgetManagedProfile(cmd.Context(), a.Profile); err != nil {
+				return err
 			}
 			delete(a.Creds.Profiles, a.Profile)
 			if err := a.saveCreds(); err != nil {
@@ -325,6 +343,9 @@ func (a *App) profileRemoveCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if err := a.confirm(yes, fmt.Sprintf("Remove profile %q, its session and its watches?", name)); err != nil {
+				return err
+			}
+			if err := a.forgetManagedProfile(cmd.Context(), name); err != nil {
 				return err
 			}
 			delete(a.Creds.Profiles, name)

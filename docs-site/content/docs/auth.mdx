@@ -1,11 +1,11 @@
 ---
 title: Authentication
-description: Export a browser cookie once, then stay logged in for about a month.
+description: Import an authorized browser session, with optional Galleton-managed renewal.
 ---
 
 Wallapop has no password API worth using. Google, Apple, Facebook and password accounts all end
 up at the same place, a session cookie in your browser. The CLI imports that cookie and then
-keeps it alive on its own.
+renews it locally or delegates renewal and encrypted storage to Galleton.
 
 <Callout type="idea" title="Why a cookie">
   An email and password login was tried and rejected; see ADR 0001 in the repository. Cookie
@@ -65,15 +65,35 @@ Login validates the session and tells you who you are, so a bad export fails at 
 rather than three commands later. It also saves your account's location as the default search
 location. Your first search already works.
 
+## Galleton-managed sessions
+
+To replace the CLI's in-process renewal with [Galleton](https://github.com/Microck/galleton),
+start its daemon with the repository's `examples/galleton.wallapop.json` adapter and set
+`WALLAPOP_GALLETON_DIR` to the daemon's private state directory. Then use the same login
+command, or run `wallapop auth status --check` to migrate an existing profile.
+
+After a successful migration, `credentials.toml` holds a `galleton_id` and account metadata,
+not the cookie. The daemon owns renewal and rotated credentials. Managed profiles never
+fall back to local renewal when the daemon is down. Unconfigured, unmigrated profiles keep
+the existing behavior; `WALLAPOP_SESSION_TOKEN` remains a non-persistent local override.
+
+See the [setup and migration guide](https://github.com/Microck/wallapop-cli/blob/main/docs/galleton.md)
+for connection settings, watch/MCP service configuration, recovery, and security limits.
+
 ## Staying logged in
 
-Wallapop rotates the session cookie as you use it. The CLI re-persists each rotation, so a
-single login lasts roughly a month of regular use rather than a day.
+Wallapop can rotate the session cookie as it is renewed. Galleton persists rotations for
+managed profiles; the CLI does so for legacy profiles. Renewal cannot override provider
+expiry, revocation, or a requirement to log in again.
 
 ```bash
-wallapop auth status          # is the session still good
-wallapop auth refresh         # exit 3 if the session is no longer valid, for scripts
+wallapop auth status          # local metadata; works offline
+wallapop auth status --check  # verify that a usable API token is available
+wallapop auth refresh         # request renewal; nonzero exit on failure
 ```
+
+Managed status reports `source: "galleton"` and the daemon session ID. Cookie expiry is
+omitted because the daemon does not expose it; use `galleton status` for renewal details.
 
 ## Profiles
 
@@ -116,3 +136,6 @@ your config never leaks your session.
 wallapop auth logout --profile alt   # keeps config and watches
 wallapop profile remove alt          # removes everything for that account
 ```
+
+For managed profiles, these commands forget the daemon session first. A daemon outage
+fails the command without discarding the local reference, so removal can be retried.

@@ -104,10 +104,11 @@ func Save(path string, cfg Config) error {
 	return writeAtomic(path, out, 0o644)
 }
 
-// Session is what lets the CLI act as one Wallapop account. The cookie is the
-// only secret; access tokens are minted from it and never stored.
+// Session stores either a Galleton reference and account metadata, or a legacy
+// cookie awaiting migration. Managed provider credentials live only in Galleton.
 type Session struct {
-	SessionCookie string `toml:"session_cookie" json:"-"`
+	GalletonID    string `toml:"galleton_id,omitempty" json:"galleton_id,omitempty"`
+	SessionCookie string `toml:"session_cookie,omitempty" json:"-"`
 	DeviceID      string `toml:"device_id" json:"device_id"`
 	UserHash      string `toml:"user_hash" json:"user_hash"`
 	Name          string `toml:"name" json:"name"`

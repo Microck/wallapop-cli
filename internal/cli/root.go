@@ -49,7 +49,8 @@ type App struct {
 	flagNoInput     bool
 	flagDebug       bool
 
-	store *store.Store
+	store   *store.Store
+	managed *managedSession
 }
 
 // Execute runs the CLI and returns the process exit code.
@@ -182,6 +183,9 @@ func (a *App) setup(cmd *cobra.Command) error {
 // attachSession wires the active profile's session (or WALLAPOP_SESSION_TOKEN)
 // into the client. Commands that need auth call requireSession.
 func (a *App) attachSession() {
+	if a.attachManagedSession() {
+		return
+	}
 	cookie, deviceID := "", ""
 	if env := os.Getenv("WALLAPOP_SESSION_TOKEN"); env != "" {
 		cookie = env
