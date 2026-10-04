@@ -65,7 +65,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
+          # Leave token auth unconfigured so npm can use its OIDC exchange.
           package-manager-cache: false
       - name: select released version
         id: version
