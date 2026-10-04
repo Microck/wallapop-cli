@@ -9,6 +9,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-mit-000000?style=flat-square" alt="license badge"></a>
 </p>
 
+<p align="center">
+  <a href=".github/assets/wallapop-cli-v5-en-posterized-12fps-24fps.mp4">watch the latest demo (24 fps)</a>
+</p>
+
 ---
 
 `wallapop` is a terminal cli for wallapop that lets you search with every filter the web has, watch searches, items, and sellers for changes, and chat with sellers, all from your own account. it compiles to one static Go binary. output is json by default so everything pipes into `jq`. `--format pretty` is for humans.
