@@ -51,29 +51,36 @@ completion <shell>
   Email+password login (`POST /api/v3/access/login`) is not implemented: the flow was not
   verified and cookie import covers every account. Implicitly creates the Profile; the
   first Profile becomes default.
-- `auth status` shows profile, account name, the stored cookie's expiry, where the session
-  came from; `--check` mints once to prove the Session still works.
-- `auth refresh` mints once and prints the same status as `auth status`, now carrying the
-  rotated cookie's expiry. Exit 3 when the Session is rejected. For people who schedule with
-  cron instead of `watch service`; `watch check` already does this on its own.
-- `auth logout [--yes]` deletes the Profile's Session. Not a destructive Wallapop action, so no
-  prompt; `--yes` exists for symmetry only.
+- `auth status` shows locally stored profile/account metadata and the session source;
+  `--check` obtains a usable token and reports `session_valid`. Managed cookie expiry is
+  omitted because the daemon API does not expose it.
+- `auth refresh` explicitly requests renewal and prints status. A failed or paused renewal
+  fails the command; provider expiry/revocation can require another browser import.
+- `auth logout [--yes]` forgets the daemon session before deleting the local reference.
+  Failed deletion preserves the reference for retry. This does not revoke the browser login.
+- `auth service run` keeps renewal in the foreground. `enable` explicitly installs a user
+  OS-login service/task, `disable` removes it, `status` inspects without starting it, and
+  `stop` drains an idle engine. Active clients prevent shutdown. No service is installed
+  automatically.
 
-Session mechanics (verified): `GET https://es.wallapop.com/api/auth/session` with the
-session cookie returns `{token, idToken, expires}`; `token` is a Keycloak JWT valid 5 minutes.
-The response rotates the session cookie via `Set-Cookie`; the CLI persists the newest one
-(old ones keep working, so a lost rotation is not fatal). Access tokens are cached in memory
-and re-minted 30 s before expiry. All `api.wallapop.com` calls send
-`Authorization: Bearer <token>` and `X-DeviceOS: 0`.
+Session mechanics: a pinned Galleton executable is included in release binaries and managed
+by the CLI. It renews through the existing `GET /api/auth/session` endpoint, extracts
+`/token`, requires a replacement cookie, and persists rotated credentials in its encrypted
+vault. The provider adapter's interval is 240 seconds, not a promise about token lifetime.
+Only the bearer token is handed to the existing API transport. Uploads and PubNub keep
+separate transports.
 
-Sliding window (verified 2026-09-14): every mint re-issues the cookie with a fresh 30-day
-`Expires`, so running any authenticated command at least once every 30 days keeps the Session
-alive indefinitely, and 30 days of silence ends it. Watches read public data and would never
-mint, so `watch check` and each `watch run` tick mint once when the Profile has a stored
-Session; a rejected Session there is a stderr warning, not a failure, because the Watches
-still ran. The stored expiry is `session_expires` in `credentials.toml`. A Session from
-`WALLAPOP_SESSION_TOKEN` is never persisted, so nothing slides it; re-export it before it
-expires.
+Session lifetime remains controlled by Wallapop. The historical sliding-cookie behavior
+recorded in ADR 0001 does not establish indefinite validity. No renewal is automatically
+replayed after an ambiguous failure. Watch checks obtain a token when a stored session
+exists; failure is a warning so public Watch checks can still run.
+
+Legacy cookie profiles migrate on first authenticated use. After obtaining a usable token,
+the CLI atomically replaces the local cookie with a stable `galleton_id`. Concurrent saves
+preserve other profiles; stale saves cannot resurrect a removed profile. An interrupted
+migration adopts the existing daemon session instead of overwriting its rotated cookie.
+`WALLAPOP_SESSION_TOKEN` remains a non-persistent explicit environment override; it is not
+silently migrated. See [the lifecycle guide](galleton.md) and ADR 0003.
 
 ### profile
 
@@ -472,11 +479,13 @@ Paths via XDG (`adrg/xdg`):
 | what | path | mode |
 |---|---|---|
 | config | `$XDG_CONFIG_HOME/wallapop-cli/config.toml` | 0644 |
-| sessions | `$XDG_CONFIG_HOME/wallapop-cli/credentials.toml` | 0600, atomic writes |
+| session references | `$XDG_CONFIG_HOME/wallapop-cli/credentials.toml` | 0600, locked/atomic updates |
+| session vault | `$XDG_CONFIG_HOME/wallapop-cli/galleton/` | private directory, encrypted provider credentials |
 | state | `$XDG_DATA_HOME/wallapop-cli/state.db` (SQLite, `modernc.org/sqlite`) | 0600 |
 | logs | `$XDG_STATE_HOME/wallapop-cli/` | |
 
-`credentials.toml` holds one table per Profile: session cookie, device id, account hash, name.
+`credentials.toml` holds one table per Profile: Galleton session ID, device id, account hash, name.
+Legacy cookies are read only for safe migration and are removed after successful handoff.
 It is never relocatable by config, only by XDG variables.
 
 Config (`pelletier/go-toml/v2`, unknown keys are errors):

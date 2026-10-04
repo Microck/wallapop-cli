@@ -2,9 +2,9 @@
 title: Install
 description: Get the binary on macOS, Linux or Windows.
 ---
-<Callout type="info" title="Version 0.1.0">
-  Every path below was verified against the v0.1.0 release and prints `wallapop 0.1.0`.
-  Each release also ships `checksums.txt` with a GitHub provenance attestation.
+<Callout type="info" title="Release binaries">
+  Release builds include the pinned Galleton session engine. No separate daemon installation
+  is required. Releases ship `checksums.txt` with a GitHub provenance attestation.
 </Callout>
 
 ## Installer
@@ -52,9 +52,14 @@ The package covers Linux amd64 and arm64, verifies the checksum and installs the
 ## Go install
 
 ```bash
-go install github.com/Microck/wallapop-cli/cmd/wallapop@v0.1.0
+go install github.com/Microck/wallapop-cli/cmd/wallapop@latest
 wallapop --version
 ```
+
+A plain Go install builds the pinned engine on first authenticated use, using the Go
+toolchain and module cache. An uncached module needs download access once. To include the
+engine before installation, clone the repository and run `make install`; release binaries
+also work without Go or an engine download at runtime.
 
 ## Check it works
 

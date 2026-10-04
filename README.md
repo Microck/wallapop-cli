@@ -62,6 +62,11 @@ go install github.com/Microck/wallapop-cli/cmd/wallapop@latest
 wallapop --version
 ```
 
+release binaries include the pinned Galleton session engine; there is no separate install.
+`go install` source builds prepare that same pinned engine on their first authenticated use,
+using the Go toolchain and module cache (network is needed only if the module is not cached).
+For a fully bundled source build, clone this repository and run `make install`.
+
 every release ships `checksums.txt` with a github provenance attestation:
 
 ```sh
@@ -97,7 +102,19 @@ wallapop auth login --cookies ~/Downloads/cookies.txt
 cat cookies.txt | wallapop auth login --cookies-stdin
 ```
 
-the cli keeps only that cookie and your device id, in a 0600 file under `~/.config/wallapop-cli/credentials.toml`. it mints short-lived access tokens itself, the same way the web does, and re-saves the cookie as wallapop rotates it. the session slides 30 days on every authenticated command. your account location becomes the default search centre.
+the cli starts its bundled Galleton engine automatically, imports the session, and stores rotated credentials in a private encrypted vault. `credentials.toml` holds a session reference and account metadata, not the managed cookie. existing saved sessions migrate on their next authenticated use. your account location becomes the default search centre.
+
+the engine is shared by concurrent cli, watch, and MCP commands and stops shortly after its last client exits. no separate `galleton serve`, environment variables, or startup service are required. renewal still respects Wallapop expiry, revocation, and reauthentication requirements.
+
+for renewal between commands, explicitly enable startup at OS login:
+
+```bash
+wallapop auth service enable
+wallapop auth service status
+wallapop auth service disable
+```
+
+`wallapop auth service run` is the foreground alternative for your own supervisor. the CLI never silently installs an OS startup service. see [session lifecycle and recovery](docs/galleton.md).
 
 check session status or verify credentials:
 
@@ -134,7 +151,8 @@ wallapop search "bici" --format jsonl
 
 | command | what it does |
 |---|---|
-| `auth login / status / refresh / logout` | import, inspect, renew or forget a session (slides 30 days on every authenticated command) |
+| `auth login / status / refresh / logout` | import, inspect, renew or forget a managed session |
+| `auth service enable / disable / status / run / stop` | explicitly manage unattended renewal and inspect the bundled engine |
 | `profile list / use / remove` | several accounts side by side |
 | `search [keywords] [--filter k=v]...` | search around your location; `search filters` lists valid keys |
 | `category list` | category ids |

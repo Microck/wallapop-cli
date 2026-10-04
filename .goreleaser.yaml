@@ -5,6 +5,7 @@ project_name: wallapop
 before:
   hooks:
     - go mod tidy
+    - go run ./cmd/bundle-galleton -all
 
 builds:
   - id: wallapop
@@ -12,6 +13,7 @@ builds:
     # names the binary wallapop, not wallapop-cli.
     main: ./cmd/wallapop
     binary: wallapop
+    tags: [galleton_bundle]
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin, windows]
@@ -29,6 +31,7 @@ archives:
     files:
       - LICENSE
       - README.md
+      - THIRD_PARTY_NOTICES.md
 
 checksum:
   name_template: checksums.txt

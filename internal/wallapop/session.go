@@ -27,6 +27,8 @@ type Session struct {
 	CookieExpires time.Time
 	DeviceID      string
 	OnRotate      func(newCookie string, expires time.Time)
+	// Delegate replaces local minting/caching for daemon-managed sessions.
+	Delegate TokenSource
 
 	client *Client
 	mu     sync.Mutex
@@ -41,6 +43,9 @@ func NewSession(c *Client, cookie, deviceID string) *Session {
 
 // AccessToken returns a cached token or mints a new one 30 s before expiry.
 func (s *Session) AccessToken(ctx context.Context) (string, error) {
+	if s.Delegate != nil {
+		return s.Delegate.AccessToken(ctx)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.token != "" && time.Until(s.exp) > 30*time.Second {

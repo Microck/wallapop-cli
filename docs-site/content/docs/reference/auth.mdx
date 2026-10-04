@@ -28,7 +28,8 @@ cookie export from a browser where you are logged in:
   3. Run this command and paste the file path or the value when asked, or pass
      --cookies FILE / --cookies-stdin.
 
-The CLI mints short-lived access tokens from that cookie exactly as the web does.
+The CLI starts its bundled Galleton session engine automatically. The engine
+renews tokens and stores rotated cookies in its encrypted private vault.
 Nothing else from the export is kept. Google, Apple and Facebook accounts work the
 same way, since the cookie is what the browser holds after any login method.
 
@@ -57,18 +58,65 @@ wallapop auth logout [flags]
 
 ## `wallapop auth refresh`
 
-Mint once to extend the session and show its new expiry
+Renew the session through the managed engine
 
 ```bash
 wallapop auth refresh
 ```
 
-Mint once to extend the session and show its new expiry.
+Renew the session through the managed engine.
 
-Wallapop re-issues the session cookie with a fresh 30-day expiry on every mint,
-so any authenticated command keeps the session alive. `watch check` does this
-on its own; this command is for people who schedule with cron instead of
-`watch service`, or who want to see how long the session has left.
+Galleton owns credential rotation and persistence. A refresh can still fail when
+Wallapop revokes the session or requires a new browser login. Enable unattended
+renewal explicitly with "wallapop auth service enable".
+
+## `wallapop auth service`
+
+Manage optional unattended session renewal
+
+### `wallapop auth service disable`
+
+Remove unattended renewal at OS login
+
+```bash
+wallapop auth service disable
+```
+
+### `wallapop auth service enable`
+
+Enable unattended renewal at OS login
+
+```bash
+wallapop auth service enable
+```
+
+### `wallapop auth service run`
+
+Keep session renewal running until interrupted
+
+```bash
+wallapop auth service run [flags]
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--dir` | string | - | absolute private state directory (used by installed services) |
+
+### `wallapop auth service status`
+
+Inspect the session engine without starting it
+
+```bash
+wallapop auth service status
+```
+
+### `wallapop auth service stop`
+
+Stop an idle session engine without deleting credentials
+
+```bash
+wallapop auth service stop
+```
 
 ## `wallapop auth status`
 

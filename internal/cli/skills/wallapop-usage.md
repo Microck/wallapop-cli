@@ -23,9 +23,9 @@ wallapop auth login --cookies cookies.txt        # Netscape export from a logged
 wallapop auth status --check
 ```
 
-The only secret kept is the `__Secure-next-auth.session-token` cookie. Profiles: `--profile NAME` or `WALLAPOP_PROFILE`.
+The bundled Galleton engine encrypts the imported session and rotated access credentials; the CLI stores only its reference. Profiles: `--profile NAME` or `WALLAPOP_PROFILE`.
 
-The session slides: every authenticated command renews it for 30 days, and 30 days without one ends it. `wallapop watch check` renews it as a side effect, so a scheduled watch keeps the session alive. Without watches, schedule `wallapop auth refresh` (prints the new expiry); `auth status` shows the current one.
+The engine starts automatically when needed, migrates legacy cookies safely, and is shared by concurrent CLI/watch/MCP commands. It shuts down after the last client exits. To renew between commands, explicitly run `wallapop auth service enable`; `disable` removes startup, `status` inspects it, and `run` stays in the foreground. No extra Galleton install or environment variables are needed. Revocation or provider changes can still require a fresh browser export. `auth refresh` requests renewal; `auth status --check` verifies a token, not a guarantee of future session lifetime.
 
 ## Saved searches
 
@@ -97,4 +97,4 @@ Not tools, on purpose: `item reserve`, `item sold`, `item delete`, `item create`
 
 ## Config
 
-`$XDG_CONFIG_HOME/wallapop-cli/config.toml`; `wallapop config set watch.interval 10m`; `wallapop config path`. Credentials live in `credentials.toml` (0600), state in `$XDG_DATA_HOME/wallapop-cli/state.db`.
+`$XDG_CONFIG_HOME/wallapop-cli/config.toml`; `wallapop config set watch.interval 10m`; `wallapop config path`. Session references live in `credentials.toml` (0600), the private engine vault in the adjacent `galleton/` directory, state in `$XDG_DATA_HOME/wallapop-cli/state.db`.

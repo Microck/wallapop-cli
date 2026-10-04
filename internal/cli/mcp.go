@@ -104,6 +104,11 @@ func (a *App) runCommand(ctx context.Context, argv []string) mcp.Result {
 		// server's stderr, which the harness logs; stdout is the transport.
 		Stderr: a.Stderr,
 	}
+	defer func() {
+		if sub.sessionClient != nil {
+			sub.sessionClient.Close()
+		}
+	}()
 	root := sub.rootCmd()
 	// --no-input: nothing here has a terminal to prompt at. The server's own
 	// profile carries over, so a harness started with --profile keeps acting

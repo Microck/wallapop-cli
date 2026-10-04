@@ -17,7 +17,7 @@ import (
 
 func (a *App) authCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "auth", Short: "Log in, inspect or remove the session for a profile"}
-	cmd.AddCommand(a.authLoginCmd(), a.authStatusCmd(), a.authRefreshCmd(), a.authLogoutCmd())
+	cmd.AddCommand(a.authLoginCmd(), a.authStatusCmd(), a.authRefreshCmd(), a.authLogoutCmd(), a.authServiceCmd())
 	return cmd
 }
 
@@ -38,7 +38,8 @@ cookie export from a browser where you are logged in:
   3. Run this command and paste the file path or the value when asked, or pass
      --cookies FILE / --cookies-stdin.
 
-The CLI mints short-lived access tokens from that cookie exactly as the web does.
+The CLI starts its bundled Galleton session engine automatically. The engine
+renews tokens and stores rotated cookies in its encrypted private vault.
 Nothing else from the export is kept. Google, Apple and Facebook accounts work the
 same way, since the cookie is what the browser holds after any login method.
 
@@ -87,14 +88,14 @@ Examples:
 				deviceID = wallapop.NewDeviceID()
 			}
 			// Validate by minting once and reading the profile.
-			a.Session = wallapop.NewSession(a.Client, cookie, deviceID)
-			a.Client.Tokens = a.Session
+			a.managedLogin(cookie, deviceID)
 			me, err := a.Client.Me(cmd.Context())
 			if err != nil {
 				return err
 			}
 			a.Creds.Profiles[a.Profile] = config.Session{
-				SessionCookie: a.Session.Cookie, SessionExpires: a.Session.CookieExpires.UTC(), DeviceID: deviceID, UserHash: me.Hash, Name: me.Name, UpdatedAt: time.Now().UTC(),
+				GalletonID: a.managedID(), DeviceID: deviceID,
+				UserHash: me.Hash, Name: me.Name, UpdatedAt: time.Now().UTC(),
 			}
 			if err := a.saveCreds(); err != nil {
 				return err
@@ -118,7 +119,7 @@ Examples:
 					return err
 				}
 			}
-			return a.Printer.Print(authStatus{Profile: a.Profile, LoggedIn: true, Account: me.Name, UserHash: me.Hash, Source: "credentials", Location: a.Cfg.Profiles[a.Profile].Location})
+			return a.Printer.Print(authStatus{Profile: a.Profile, LoggedIn: true, Account: me.Name, UserHash: me.Hash, Source: "galleton", GalletonID: a.managedID(), Location: a.Cfg.Profiles[a.Profile].Location})
 		},
 	}
 	cmd.Flags().StringVar(&cookiesFile, "cookies", "", "path to a Netscape cookie export")
@@ -133,6 +134,7 @@ type authStatus struct {
 	Account        string           `json:"account,omitempty"`
 	UserHash       string           `json:"user_hash,omitempty"`
 	Source         string           `json:"source,omitempty"`
+	GalletonID     string           `json:"galleton_id,omitempty"`
 	UpdatedAt      *time.Time       `json:"updated_at,omitempty"`
 	SessionExpires *time.Time       `json:"session_expires,omitempty"`
 	Location       *config.Location `json:"location,omitempty"`
@@ -145,6 +147,9 @@ func (s authStatus) Pretty(w io.Writer, color bool) {
 		rows = append(rows, []string{"session", "none (run `wallapop auth login`)"})
 	} else {
 		rows = append(rows, []string{"account", s.Account + " " + output.Dim(s.UserHash, color)}, []string{"source", s.Source})
+		if s.GalletonID != "" {
+			rows = append(rows, []string{"galleton", s.GalletonID})
+		}
 		if s.UpdatedAt != nil {
 			rows = append(rows, []string{"updated", s.UpdatedAt.Local().Format(time.RFC3339)})
 		}
@@ -168,8 +173,7 @@ func (a *App) authStatusCmd() *cobra.Command {
 		Short: "Show the active profile's session",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Mint before reading the stored session: the mint rotates the
-			// cookie and persists a new expiry, which is what should print.
+			// Resolve migration before reading the locally stored session reference.
 			var valid *bool
 			if check && a.Session != nil {
 				_, err := a.Session.AccessToken(cmd.Context())
@@ -186,7 +190,7 @@ func (a *App) authStatusCmd() *cobra.Command {
 }
 
 // currentStatus describes the active profile's session as stored right now.
-// Read it after any mint, since a mint rotates the cookie and its expiry.
+// Read it after token acquisition, which may migrate a legacy cookie.
 func (a *App) currentStatus() authStatus {
 	st := authStatus{Profile: a.Profile}
 	if p, ok := a.Cfg.Profiles[a.Profile]; ok {
@@ -200,6 +204,10 @@ func (a *App) currentStatus() authStatus {
 	} else if s, ok := a.Creds.Profiles[a.Profile]; ok {
 		st.LoggedIn, st.Source, st.Account, st.UserHash = true, "credentials", s.Name, s.UserHash
 		st.UpdatedAt, st.SessionExpires = timePtr(s.UpdatedAt), timePtr(s.SessionExpires)
+		if s.GalletonID != "" {
+			st.Source, st.GalletonID = "galleton", s.GalletonID
+			st.SessionExpires = nil // Galleton does not expose the cookie expiry.
+		}
 	}
 	return st
 }
@@ -215,20 +223,19 @@ func timePtr(t time.Time) *time.Time {
 func (a *App) authRefreshCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "refresh",
-		Short: "Mint once to extend the session and show its new expiry",
-		Long: `Mint once to extend the session and show its new expiry.
+		Short: "Renew the session through the managed engine",
+		Long: `Renew the session through the managed engine.
 
-Wallapop re-issues the session cookie with a fresh 30-day expiry on every mint,
-so any authenticated command keeps the session alive. ` + "`watch check`" + ` does this
-on its own; this command is for people who schedule with cron instead of
-` + "`watch service`" + `, or who want to see how long the session has left.`,
+Galleton owns credential rotation and persistence. A refresh can still fail when
+Wallapop revokes the session or requires a new browser login. Enable unattended
+renewal explicitly with "wallapop auth service enable".`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := a.requireSession(); err != nil {
 				return err
 			}
-			// A fresh process has no cached token, so this always mints once.
-			if _, err := a.Session.AccessToken(cmd.Context()); err != nil {
+			// Explicitly refresh in the daemon, even when it has a cached token.
+			if err := a.refreshSession(cmd.Context()); err != nil {
 				return err
 			}
 			return a.Printer.Print(a.currentStatus())
@@ -244,6 +251,9 @@ func (a *App) authLogoutCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, ok := a.Creds.Profiles[a.Profile]; !ok {
 				return a.Printer.Print(authStatus{Profile: a.Profile})
+			}
+			if err := a.forgetManagedProfile(cmd.Context(), a.Profile); err != nil {
+				return err
 			}
 			delete(a.Creds.Profiles, a.Profile)
 			if err := a.saveCreds(); err != nil {
@@ -325,6 +335,9 @@ func (a *App) profileRemoveCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if err := a.confirm(yes, fmt.Sprintf("Remove profile %q, its session and its watches?", name)); err != nil {
+				return err
+			}
+			if err := a.forgetManagedProfile(cmd.Context(), name); err != nil {
 				return err
 			}
 			delete(a.Creds.Profiles, name)

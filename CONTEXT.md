@@ -56,7 +56,7 @@ One named Wallapop account known to the CLI, with its Session and default Locati
 _Avoid_: Account (ambiguous with the Wallapop account itself), user
 
 **Session**:
-The long-lived web session cookie and device id that let the CLI act as a Profile's account. Short-lived access tokens are minted from it and are not part of the Session.
+The imported web authorization that lets the CLI act as a Profile's account. Galleton manages its cookies and rotated credentials; the CLI stores a session reference and device id.
 _Avoid_: Credentials, cookies, login, token
 
 **Access token**:

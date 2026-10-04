@@ -1,11 +1,11 @@
 ---
 title: Authentication
-description: Export a browser cookie once, then stay logged in for about a month.
+description: Import a browser session; the bundled engine handles renewal and private storage.
 ---
 
 Wallapop has no password API worth using. Google, Apple, Facebook and password accounts all end
 up at the same place, a session cookie in your browser. The CLI imports that cookie and then
-keeps it alive on its own.
+automatically starts its bundled Galleton engine for renewal and encrypted storage.
 
 <Callout type="idea" title="Why a cookie">
   An email and password login was tried and rejected; see ADR 0001 in the repository. Cookie
@@ -65,15 +65,44 @@ Login validates the session and tells you who you are, so a bad export fails at 
 rather than three commands later. It also saves your account's location as the default search
 location. Your first search already works.
 
+## Managed sessions
+
+No separate daemon installation or setup is required. Release binaries include Galleton;
+the CLI starts it when authentication is needed and shares it across CLI, watch, and MCP
+processes. It shuts down shortly after its last active client exits.
+
+Existing saved cookies migrate automatically on their next authenticated use. After a
+successful migration, `credentials.toml` contains a `galleton_id` and account metadata,
+not the cookie. A failed migration preserves recovery information. Managed profiles never
+silently fall back to old cookies.
+
+Plain `go install` source builds prepare the pinned engine once using Go and the module
+cache; release binaries and `make install` already include it.
+
 ## Staying logged in
 
-Wallapop rotates the session cookie as you use it. The CLI re-persists each rotation, so a
-single login lasts roughly a month of regular use rather than a day.
+```bash
+wallapop auth status          # local metadata; works offline
+wallapop auth status --check  # verify a usable API token
+wallapop auth refresh         # explicit renewal; nonzero exit on failure
+```
+
+To renew between commands, explicitly enable a service at OS login:
 
 ```bash
-wallapop auth status          # is the session still good
-wallapop auth refresh         # exit 3 if the session is no longer valid, for scripts
+wallapop auth service enable
+wallapop auth service status
+wallapop auth service disable
 ```
+
+Nothing installs a startup service silently. `auth service run` is the foreground
+alternative for your own supervisor. `auth service stop` refuses to stop an engine still
+in use by another client. Renewal cannot override Wallapop expiry, revocation, or a
+requirement to log in again; it cannot run while the computer is off.
+
+Managed status reports `source: "galleton"` and the session ID. Cookie expiry is omitted
+because the daemon does not expose it. The [lifecycle and recovery guide](https://github.com/Microck/wallapop-cli/blob/main/docs/galleton.md)
+documents storage, source builds, failure recovery, and advanced external-daemon settings.
 
 ## Profiles
 
@@ -101,14 +130,16 @@ wallapop search "bici" --format jsonl
   <Folder name="$XDG_CONFIG_HOME/wallapop-cli" defaultOpen>
     <File name="config.toml" />
     <File name="credentials.toml" />
+    <Folder name="galleton (private encrypted vault)" />
   </Folder>
   <Folder name="$XDG_DATA_HOME/wallapop-cli">
     <File name="state.db" />
   </Folder>
 </Files>
 
-The CLI keeps `credentials.toml` separate from `config.toml` and writes it at mode `0600`, so sharing
-your config never leaks your session.
+The CLI writes `credentials.toml` at mode `0600`. It holds managed-session references, not
+provider cookies. The private `galleton` directory contains the vault and its local API token
+and encryption key; do not share that directory.
 
 ## Log out
 
@@ -116,3 +147,6 @@ your config never leaks your session.
 wallapop auth logout --profile alt   # keeps config and watches
 wallapop profile remove alt          # removes everything for that account
 ```
+
+For managed profiles, these commands forget the daemon session first. A daemon outage
+fails the command without discarding the local reference, so removal can be retried.

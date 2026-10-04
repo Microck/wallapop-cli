@@ -13,11 +13,11 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Microck/wallapop-cli/internal/config"
+	"github.com/Microck/wallapop-cli/internal/galleton"
 	"github.com/Microck/wallapop-cli/internal/output"
 	"github.com/Microck/wallapop-cli/internal/store"
 	"github.com/Microck/wallapop-cli/internal/wallapop"
@@ -25,6 +25,9 @@ import (
 
 // App is the per-invocation state shared by every command.
 type App struct {
+	sessionClient *galleton.Client
+	loadedCreds   config.Credentials
+
 	Version string
 	Paths   config.Paths
 	Cfg     config.Config
@@ -49,12 +52,24 @@ type App struct {
 	flagNoInput     bool
 	flagDebug       bool
 
-	store *store.Store
+	store   *store.Store
+	managed *managedSession
 }
 
 // Execute runs the CLI and returns the process exit code.
 func Execute(version string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if handled, err := galleton.HandleHost(args); handled {
+		if err != nil {
+			return 1
+		}
+		return 0
+	}
 	app := &App{Version: version, Stdin: stdin, Stdout: stdout, Stderr: stderr}
+	defer func() {
+		if app.sessionClient != nil {
+			app.sessionClient.Close()
+		}
+	}()
 	root := app.rootCmd()
 	root.SetArgs(args)
 	root.SetIn(stdin)
@@ -162,6 +177,7 @@ func (a *App) setup(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	a.loadedCreds = config.CloneCredentials(a.Creds)
 	a.Profile = config.ResolveProfile(a.flagProfile, a.Cfg)
 
 	stdoutFile, _ := a.Stdout.(*os.File)
@@ -182,30 +198,13 @@ func (a *App) setup(cmd *cobra.Command) error {
 // attachSession wires the active profile's session (or WALLAPOP_SESSION_TOKEN)
 // into the client. Commands that need auth call requireSession.
 func (a *App) attachSession() {
-	cookie, deviceID := "", ""
-	if env := os.Getenv("WALLAPOP_SESSION_TOKEN"); env != "" {
-		cookie = env
-	} else if s, ok := a.Creds.Profiles[a.Profile]; ok {
-		cookie, deviceID = s.SessionCookie, s.DeviceID
-	}
-	if cookie == "" {
+	if a.attachManagedSession() {
 		return
 	}
-	a.Session = wallapop.NewSession(a.Client, cookie, deviceID)
-	a.Session.OnRotate = func(newCookie string, expires time.Time) {
-		s, ok := a.Creds.Profiles[a.Profile]
-		if !ok || os.Getenv("WALLAPOP_SESSION_TOKEN") != "" {
-			return
-		}
-		s.SessionCookie = newCookie
-		s.SessionExpires = expires.UTC()
-		s.UpdatedAt = time.Now().UTC()
-		a.Creds.Profiles[a.Profile] = s
-		if err := config.SaveCredentials(a.Paths.CredentialsFile, a.Creds); err != nil {
-			fmt.Fprintf(a.Stderr, "wallapop: could not persist rotated session: %v\n", err)
-		}
+	if cookie := os.Getenv("WALLAPOP_SESSION_TOKEN"); cookie != "" {
+		a.Session = wallapop.NewSession(a.Client, cookie, "")
+		a.Client.Tokens = a.Session
 	}
-	a.Client.Tokens = a.Session
 }
 
 func (a *App) requireSession() error {
@@ -292,4 +291,11 @@ func (a *App) location(lat, lng float64, radius int) (config.Location, error) {
 // saveConfig writes config.toml back.
 func (a *App) saveConfig() error { return config.Save(a.Paths.ConfigFile, a.Cfg) }
 
-func (a *App) saveCreds() error { return config.SaveCredentials(a.Paths.CredentialsFile, a.Creds) }
+func (a *App) saveCreds() error {
+	next, err := config.MergeCredentials(a.Paths.CredentialsFile, a.loadedCreds, a.Creds)
+	if err == nil {
+		a.Creds = next
+		a.loadedCreds = config.CloneCredentials(next)
+	}
+	return err
+}
