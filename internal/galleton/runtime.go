@@ -30,6 +30,8 @@ var adapter []byte
 const hostCommand = "__galleton-host"
 const idleGrace = 10 * time.Second
 
+var errHostVersionMismatch = errors.New("a different session engine version is still running; run `wallapop auth service disable && wallapop auth service enable`, or stop watch/MCP processes, then retry")
+
 type endpoint struct {
 	URL     string `json:"url"`
 	Version string `json:"version"`
@@ -80,12 +82,16 @@ func Open(ctx context.Context, dir string) (*Client, error) {
 		}
 		return c, err
 	}
-	if c, err := connect(); err == nil {
+	c, connectErr := connect()
+	if connectErr == nil {
 		return c, nil
 	}
 	host, free, err := filelock.Try(filepath.Join(dir, "host.lock"))
 	if err != nil {
 		return nil, err
+	}
+	if !free && errors.Is(connectErr, errHostVersionMismatch) {
+		return nil, connectErr
 	}
 	if free {
 		filelock.Release(host)
@@ -127,6 +133,18 @@ func Open(ctx context.Context, dir string) (*Client, error) {
 	for {
 		if c, err := connect(); err == nil {
 			return c, nil
+		} else if !free && errors.Is(err, errHostVersionMismatch) {
+			// A host that was still starting may have only just published its
+			// endpoint. Confirm it is alive before reporting the version conflict.
+			// Ignore stale endpoints when we launched the replacement ourselves.
+			host, unlocked, lockErr := filelock.Try(filepath.Join(dir, "host.lock"))
+			if lockErr != nil {
+				return nil, lockErr
+			}
+			if !unlocked {
+				return nil, err
+			}
+			filelock.Release(host)
 		}
 		select {
 		case <-ctx.Done():
@@ -144,8 +162,11 @@ func running(ctx context.Context, dir string) (*Client, error) {
 		return nil, err
 	}
 	var ep endpoint
-	if json.Unmarshal(raw, &ep) != nil || ep.Version != bundle.Version {
-		return nil, errors.New("session host version does not match this CLI")
+	if json.Unmarshal(raw, &ep) != nil {
+		return nil, errors.New("invalid session host endpoint")
+	}
+	if ep.Version != bundle.Version {
+		return nil, errHostVersionMismatch
 	}
 	token, err := readRegular(filepath.Join(dir, "api.token"), 4096)
 	if err != nil {
@@ -214,11 +235,13 @@ func RunHost(dir string) error {
 	}
 	init := exec.CommandContext(ctx, binary, "init", "--dir", dir)
 	init.Env = cleanEnv()
+	noWindow(init)
 	if err := init.Run(); err != nil {
 		return errors.New("could not initialize private session storage")
 	}
 	cmd := exec.Command(binary, "serve", "--dir", dir, "--config", filepath.Join(dir, "adapters.json"), "--listen", "127.0.0.1:0")
 	cmd.Env = cleanEnv()
+	noWindow(cmd)
 	pipe, err := cmd.StderrPipe()
 	if err != nil {
 		return err

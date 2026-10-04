@@ -18,6 +18,14 @@ func CloneCredentials(in Credentials) Credentials {
 	return out
 }
 
+// sameSession compares persisted timestamps by instant, not by time-zone
+// pointers or monotonic clock data that may differ after a TOML round trip.
+func sameSession(a, b Session) bool {
+	return a.GalletonID == b.GalletonID && a.SessionCookie == b.SessionCookie &&
+		a.DeviceID == b.DeviceID && a.UserHash == b.UserHash && a.Name == b.Name &&
+		a.SessionExpires.Equal(b.SessionExpires) && a.UpdatedAt.Equal(b.UpdatedAt)
+}
+
 // MergeCredentials preserves unrelated profiles saved by concurrent commands.
 // A stale command cannot resurrect a deleted session or overwrite a reconnect.
 func MergeCredentials(path string, before, after Credentials) (Credentials, error) {
@@ -45,16 +53,16 @@ func MergeCredentials(path string, before, after Credentials) (Credentials, erro
 	for k := range keys {
 		old, had := before.Profiles[k]
 		next, has := after.Profiles[k]
-		if had == has && old == next {
+		if had == has && sameSession(old, next) {
 			continue
 		}
 		current, exists := disk.Profiles[k]
-		if exists != had || current != old {
+		if exists != had || !sameSession(current, old) {
 			// Concurrent first-use migrations to the same daemon ID are equivalent.
 			left, right := current, next
 			left.UpdatedAt = time.Time{}
 			right.UpdatedAt = time.Time{}
-			if has && exists && next.GalletonID != "" && left == right {
+			if has && exists && next.GalletonID != "" && sameSession(left, right) {
 				continue
 			}
 			if !has && !exists {

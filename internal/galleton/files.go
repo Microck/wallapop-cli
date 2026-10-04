@@ -77,10 +77,11 @@ func atomicFile(path string, b []byte, mode os.FileMode) error {
 	return os.Rename(f.Name(), path)
 }
 
-// cleanEnv keeps platform essentials, not provider cookies or arbitrary app secrets.
+// cleanEnv keeps platform essentials and certificate trust settings, not
+// provider cookies, proxy settings, or arbitrary app secrets.
 func cleanEnv() []string {
 	var env []string
-	for _, key := range []string{"HOME", "USERPROFILE", "SystemRoot", "SYSTEMROOT", "WINDIR", "PATH", "TMPDIR", "TMP", "TEMP", "LOCALAPPDATA", "APPDATA"} {
+	for _, key := range []string{"HOME", "USERPROFILE", "SystemRoot", "SYSTEMROOT", "WINDIR", "PATH", "TMPDIR", "TMP", "TEMP", "LOCALAPPDATA", "APPDATA", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
 		if v, ok := os.LookupEnv(key); ok {
 			env = append(env, key+"="+v)
 		}

@@ -59,6 +59,8 @@ func TestRealDaemonPersistsRotationAcrossRestart(t *testing.T) {
 	if err := os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: provider.Certificate().Raw}), 0600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("SSL_CERT_FILE", cert)
+	t.Setenv("SSL_CERT_DIR", t.TempDir())
 	cfg := []byte(fmt.Sprintf(`{"providers":[{"name":"wallapop","kind":"http","origins":[%q],"refresh_url":%q,"refresh_method":"GET","refresh_interval_seconds":240,"response":{"access_token_pointer":"/token","require_set_cookie":true}}]}`, provider.URL, provider.URL+"/api/auth/session"))
 	configPath := filepath.Join(dir, "test-adapters.json")
 	if err := os.WriteFile(configPath, cfg, 0600); err != nil {
@@ -67,11 +69,14 @@ func TestRealDaemonPersistsRotationAcrossRestart(t *testing.T) {
 	start := func() (*Client, func()) {
 		t.Helper()
 		init := exec.Command(binary, "init", "--dir", dir)
+		init.Env = cleanEnv()
+		noWindow(init)
 		if err := init.Run(); err != nil {
 			t.Fatal(err)
 		}
 		cmd := exec.Command(binary, "serve", "--dir", dir, "--config", configPath, "--listen", "127.0.0.1:0")
-		cmd.Env = append(cleanEnv(), "SSL_CERT_FILE="+cert)
+		cmd.Env = cleanEnv()
+		noWindow(cmd)
 		pipe, err := cmd.StderrPipe()
 		if err != nil {
 			t.Fatal(err)
