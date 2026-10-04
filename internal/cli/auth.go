@@ -17,7 +17,7 @@ import (
 
 func (a *App) authCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "auth", Short: "Log in, inspect or remove the session for a profile"}
-	cmd.AddCommand(a.authLoginCmd(), a.authStatusCmd(), a.authRefreshCmd(), a.authLogoutCmd())
+	cmd.AddCommand(a.authLoginCmd(), a.authStatusCmd(), a.authRefreshCmd(), a.authLogoutCmd(), a.authServiceCmd())
 	return cmd
 }
 
@@ -38,7 +38,8 @@ cookie export from a browser where you are logged in:
   3. Run this command and paste the file path or the value when asked, or pass
      --cookies FILE / --cookies-stdin.
 
-The CLI mints short-lived access tokens from that cookie exactly as the web does.
+The CLI starts its bundled Galleton session engine automatically. The engine
+renews tokens and stores rotated cookies in its encrypted private vault.
 Nothing else from the export is kept. Google, Apple and Facebook accounts work the
 same way, since the cookie is what the browser holds after any login method.
 
@@ -87,17 +88,14 @@ Examples:
 				deviceID = wallapop.NewDeviceID()
 			}
 			// Validate by minting once and reading the profile.
-			if !a.managedLogin(cookie, deviceID) {
-				a.Session = wallapop.NewSession(a.Client, cookie, deviceID)
-				a.Client.Tokens = a.Session
-			}
+			a.managedLogin(cookie, deviceID)
 			me, err := a.Client.Me(cmd.Context())
 			if err != nil {
 				return err
 			}
 			a.Creds.Profiles[a.Profile] = config.Session{
-				GalletonID:    a.managedID(),
-				SessionCookie: a.Session.Cookie, SessionExpires: a.Session.CookieExpires.UTC(), DeviceID: deviceID, UserHash: me.Hash, Name: me.Name, UpdatedAt: time.Now().UTC(),
+				GalletonID: a.managedID(), DeviceID: deviceID,
+				UserHash: me.Hash, Name: me.Name, UpdatedAt: time.Now().UTC(),
 			}
 			if err := a.saveCreds(); err != nil {
 				return err
@@ -121,11 +119,7 @@ Examples:
 					return err
 				}
 			}
-			source := "credentials"
-			if a.managed != nil {
-				source = "galleton"
-			}
-			return a.Printer.Print(authStatus{Profile: a.Profile, LoggedIn: true, Account: me.Name, UserHash: me.Hash, Source: source, GalletonID: a.managedID(), Location: a.Cfg.Profiles[a.Profile].Location})
+			return a.Printer.Print(authStatus{Profile: a.Profile, LoggedIn: true, Account: me.Name, UserHash: me.Hash, Source: "galleton", GalletonID: a.managedID(), Location: a.Cfg.Profiles[a.Profile].Location})
 		},
 	}
 	cmd.Flags().StringVar(&cookiesFile, "cookies", "", "path to a Netscape cookie export")
@@ -179,8 +173,7 @@ func (a *App) authStatusCmd() *cobra.Command {
 		Short: "Show the active profile's session",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Mint before reading the stored session: the mint rotates the
-			// cookie and persists a new expiry, which is what should print.
+			// Resolve migration before reading the locally stored session reference.
 			var valid *bool
 			if check && a.Session != nil {
 				_, err := a.Session.AccessToken(cmd.Context())
@@ -197,7 +190,7 @@ func (a *App) authStatusCmd() *cobra.Command {
 }
 
 // currentStatus describes the active profile's session as stored right now.
-// Read it after any mint, since a mint rotates the cookie and its expiry.
+// Read it after token acquisition, which may migrate a legacy cookie.
 func (a *App) currentStatus() authStatus {
 	st := authStatus{Profile: a.Profile}
 	if p, ok := a.Cfg.Profiles[a.Profile]; ok {
@@ -230,13 +223,12 @@ func timePtr(t time.Time) *time.Time {
 func (a *App) authRefreshCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "refresh",
-		Short: "Mint once to extend the session and show its new expiry",
-		Long: `Mint once to extend the session and show its new expiry.
+		Short: "Renew the session through the managed engine",
+		Long: `Renew the session through the managed engine.
 
-Wallapop re-issues the session cookie with a fresh 30-day expiry on every mint,
-so any authenticated command keeps the session alive. ` + "`watch check`" + ` does this
-on its own; this command is for people who schedule with cron instead of
-` + "`watch service`" + `, or who want to see how long the session has left.`,
+Galleton owns credential rotation and persistence. A refresh can still fail when
+Wallapop revokes the session or requires a new browser login. Enable unattended
+renewal explicitly with "wallapop auth service enable".`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := a.requireSession(); err != nil {

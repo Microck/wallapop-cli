@@ -1,0 +1,240 @@
+package galleton
+
+import (
+	"context"
+	"debug/buildinfo"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Microck/wallapop-cli/internal/filelock"
+	"github.com/Microck/wallapop-cli/internal/galleton/bundle"
+)
+
+func TestMain(m *testing.M) {
+	if handled, err := HandleHost(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+func bundledRuntime(t *testing.T) string {
+	t.Helper()
+	if len(bundle.Binary) == 0 {
+		t.Skip("run with -tags galleton_bundle after go run ./cmd/bundle-galleton")
+	}
+	for _, key := range []string{"WALLAPOP_GALLETON_DIR", "WALLAPOP_GALLETON_URL", "WALLAPOP_GALLETON_TOKEN_FILE"} {
+		t.Setenv(key, "")
+	}
+	dir := filepath.Join(t.TempDir(), "sessions")
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = Stop(ctx, dir)
+	})
+	return dir
+}
+func TestBundledConcurrentStartupAndLeaseLifetime(t *testing.T) {
+	dir := bundledRuntime(t)
+	const n = 8
+	var wg sync.WaitGroup
+	clients := make([]*Client, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); clients[i], errs[i] = Open(context.Background(), dir) }(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("client %d: %v", i, err)
+		}
+	}
+	defer func() {
+		for _, c := range clients {
+			c.Close()
+		}
+	}()
+	raw, err := readRegular(filepath.Join(dir, "endpoint.json"), 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ep endpoint
+	if json.Unmarshal(raw, &ep) != nil || ep.Version != bundle.Version {
+		t.Fatal("unexpected endpoint")
+	}
+	for _, c := range clients {
+		if _, err := c.Status(context.Background(), "missing"); !IsStatus(err, 404) {
+			t.Fatalf("real SDK/daemon contract: %v", err)
+		}
+	}
+	if err := Stop(context.Background(), dir); err == nil {
+		t.Fatal("stopped an engine with active clients")
+	}
+	for i := 0; i < n-1; i++ {
+		clients[i].Close()
+	}
+	if _, err := running(context.Background(), dir); err != nil {
+		t.Fatal("remaining client lost its daemon:", err)
+	}
+	for _, file := range []string{"api.token", "endpoint.json", "adapters.json"} {
+		info, err := os.Stat(filepath.Join(dir, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+			t.Fatalf("%s mode %o", file, info.Mode().Perm())
+		}
+	}
+	clients[n-1].Close()
+	if err := Stop(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestBundledIdleShutdownAndRestart(t *testing.T) {
+	dir := bundledRuntime(t)
+	c, err := Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _ := os.ReadFile(filepath.Join(dir, "api.token"))
+	// A crashed command may leave a lease file, but its OS lock is released.
+	if err := os.WriteFile(filepath.Join(dir, "leases", "crashed.lease"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	deadline := time.Now().Add(idleGrace + 6*time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(dir, "endpoint.json")); errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "endpoint.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("idle daemon did not shut down")
+	}
+	c, err = Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	next, _ := os.ReadFile(filepath.Join(dir, "api.token"))
+	if string(token) != string(next) {
+		t.Fatal("restart regenerated the vault API token")
+	}
+}
+func TestBundledRepairAndCanceledStartup(t *testing.T) {
+	dir := bundledRuntime(t)
+	if err := privateDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	path, err := engineBinary(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("corrupted binary"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := engineBinary(context.Background(), dir)
+	if err != nil || repaired != path {
+		t.Fatal("repair failed:", err)
+	}
+	raw, _ := os.ReadFile(path)
+	if string(raw) != string(bundle.Binary) {
+		t.Fatal("corrupt cache was executed")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Open(ctx, dir); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lost cancellation: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "api.token")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("canceled open started daemon")
+	}
+}
+func TestStateSymlinkAndAdapterMismatchFailClosed(t *testing.T) {
+	dir := bundledRuntime(t)
+	if runtime.GOOS != "windows" {
+		link := filepath.Join(t.TempDir(), "link")
+		if err := os.Symlink(t.TempDir(), link); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(context.Background(), link); err == nil {
+			t.Fatal("accepted symlink state directory")
+		}
+	}
+	if err := privateDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "adapters.json"), []byte(`{"providers":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(context.Background(), dir); err == nil {
+		t.Fatal("silently replaced operator-modified adapter")
+	}
+}
+func TestLeasesArePrunedOnlyAfterRelease(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "live.lease")
+	lease, err := filelock.Acquire(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := activeLeases(dir)
+	if err != nil || !active {
+		t.Fatal("lost a live lease", err)
+	}
+	filelock.Release(lease)
+	active, err = activeLeases(dir)
+	if err != nil || active {
+		t.Fatal("stale lease remained live", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("stale lease not removed")
+	}
+}
+func TestHostDoesNotInheritProviderCredentials(t *testing.T) {
+	t.Setenv("WALLAPOP_SESSION_TOKEN", "cookie-secret")
+	t.Setenv("WALLAPOP_GALLETON_TOKEN_FILE", "/secret")
+	t.Setenv("GITHUB_TOKEN", "github-secret")
+	for _, v := range cleanEnv() {
+		if v == "WALLAPOP_SESSION_TOKEN=cookie-secret" || v == "GITHUB_TOKEN=github-secret" {
+			t.Fatal("secret inherited")
+		}
+	}
+}
+
+func TestSourceBuildPreparesPinnedEngine(t *testing.T) {
+	if len(bundle.Binary) != 0 || os.Getenv("WALLAPOP_TEST_SOURCE_BUILD") != "1" {
+		t.Skip("opt-in test of the plain go-install preparation path")
+	}
+	dir := filepath.Join(t.TempDir(), "source-engine")
+	if err := privateDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	path, err := engineBinary(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := buildinfo.ReadFile(path)
+	if err != nil || info.Main.Path != bundle.Module {
+		t.Fatalf("source provenance: %+v %v", info, err)
+	}
+	// The verified cache must work without Go on PATH on subsequent invocations.
+	t.Setenv("PATH", t.TempDir())
+	cached, err := engineBinary(ctx, dir)
+	if err != nil || cached != path {
+		t.Fatalf("cache reuse: %s %v", cached, err)
+	}
+}

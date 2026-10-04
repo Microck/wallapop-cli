@@ -28,6 +28,7 @@ type managedSession struct {
 	replace     bool   // only an explicit auth login may replace a daemon session
 	initialized bool
 	client      *galleton.Client
+	connect     func(context.Context) (*galleton.Client, error)
 	redact      func(string)
 	lastToken   string
 	onReady     func() error
@@ -38,7 +39,7 @@ func (s *managedSession) initialize(ctx context.Context) error {
 		return nil
 	}
 	if s.client == nil {
-		c, err := galleton.FromEnv()
+		c, err := s.connect(ctx)
 		if err != nil {
 			return err
 		}
@@ -159,7 +160,7 @@ func managedError(err error) error {
 		e.Msg = "Galleton reports a rate limit; wait before retrying"
 	case apiErr.Status == http.StatusConflict:
 		e.Kind = wallapop.KindAuth
-		e.Msg = "Galleton paused this session or its revision changed; inspect it with `galleton status` before reconnecting"
+		e.Msg = "Galleton paused this session or its revision changed; inspect it with `wallapop auth service status` before reconnecting"
 	case apiErr.Status < 500:
 		e.Kind = wallapop.KindGeneric
 		e.Msg = "Galleton rejected the request; check the wallapop adapter and daemon configuration"
@@ -185,7 +186,7 @@ func (a *App) bindManagedSession(id, cookie, deviceID string, replace bool, onRe
 	a.Client.Redact(cookie)
 	a.managed = &managedSession{
 		id: id, cookie: cookie, origin: a.Client.WebBase, target: a.Client.APIBase,
-		replace: replace, onReady: onReady, redact: a.Client.Redact,
+		replace: replace, onReady: onReady, redact: a.Client.Redact, connect: a.galletonClient,
 	}
 	a.Session = wallapop.NewSession(a.Client, "", deviceID)
 	a.Session.Delegate = a.managed
@@ -199,7 +200,7 @@ func (a *App) attachManagedSession() bool {
 		return false
 	}
 	s, ok := a.Creds.Profiles[a.Profile]
-	if !ok || (s.GalletonID == "" && (!galleton.Configured() || s.SessionCookie == "")) {
+	if !ok || (s.GalletonID == "" && s.SessionCookie == "") {
 		return false
 	}
 	id := s.GalletonID
@@ -232,17 +233,13 @@ func (a *App) attachManagedSession() bool {
 	return true
 }
 
-func (a *App) managedLogin(cookie, deviceID string) bool {
+func (a *App) managedLogin(cookie, deviceID string) {
 	s := a.Creds.Profiles[a.Profile]
-	if !galleton.Configured() && s.GalletonID == "" {
-		return false
-	}
 	id := s.GalletonID
 	if id == "" {
 		id = a.managedProfileID(a.Profile)
 	}
 	a.bindManagedSession(id, cookie, deviceID, true, nil)
-	return true
 }
 
 func (a *App) managedID() string {
@@ -262,7 +259,7 @@ func (a *App) refreshSession(ctx context.Context) error {
 
 func (a *App) forgetManagedProfile(ctx context.Context, profile string) error {
 	s, ok := a.Creds.Profiles[profile]
-	if !ok || (s.GalletonID == "" && !galleton.Configured()) {
+	if !ok {
 		return nil
 	}
 	id := s.GalletonID
@@ -270,7 +267,7 @@ func (a *App) forgetManagedProfile(ctx context.Context, profile string) error {
 		// Also clean up a daemon import whose local migration write failed.
 		id = a.managedProfileID(profile)
 	}
-	c, err := galleton.FromEnv()
+	c, err := a.galletonClient(ctx)
 	if err != nil {
 		return managedError(err)
 	}
@@ -278,4 +275,19 @@ func (a *App) forgetManagedProfile(ctx context.Context, profile string) error {
 		return managedError(err)
 	}
 	return nil
+}
+
+func (a *App) sessionDir() string {
+	return filepath.Join(filepath.Dir(a.Paths.CredentialsFile), "galleton")
+}
+func (a *App) galletonClient(ctx context.Context) (*galleton.Client, error) {
+	if a.sessionClient != nil {
+		return a.sessionClient, nil
+	}
+	c, err := galleton.Open(ctx, a.sessionDir())
+	if err != nil {
+		return nil, err
+	}
+	a.sessionClient = c
+	return c, nil
 }

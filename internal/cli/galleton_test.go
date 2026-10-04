@@ -18,6 +18,9 @@ import (
 // This fake exercises the daemon API contract, not Wallapop's live renewal
 // endpoint. In particular, only Galleton is allowed to hold the imported cookie.
 type fakeGalleton struct {
+	provider     *fakewallapop.Server
+	cookies      map[string]string
+	tokens       map[string]string
 	mu           sync.Mutex
 	sessions     map[string]galleton.Metadata
 	imports      []galleton.Credentials
@@ -28,7 +31,7 @@ type fakeGalleton struct {
 
 func enableGalleton(t *testing.T) *fakeGalleton {
 	t.Helper()
-	d := &fakeGalleton{sessions: map[string]galleton.Metadata{}}
+	d := &fakeGalleton{sessions: map[string]galleton.Metadata{}, cookies: map[string]string{}, tokens: map[string]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		d.mu.Lock()
 		defer d.mu.Unlock()
@@ -60,6 +63,8 @@ func enableGalleton(t *testing.T) *fakeGalleton {
 				return
 			}
 			d.imports = append(d.imports, in)
+			d.cookies[id] = in.CookieHeader
+			delete(d.tokens, id)
 			meta = galleton.Metadata{ID: id, Provider: in.Provider, Revision: meta.Revision + 1, Status: "ready"}
 			d.sessions[id] = meta
 			w.WriteHeader(http.StatusCreated)
@@ -73,7 +78,39 @@ func enableGalleton(t *testing.T) *fakeGalleton {
 				return
 			}
 			delete(d.sessions, id)
-		} else if len(parts) == 2 && parts[1] == "headers" {
+			delete(d.cookies, id)
+			delete(d.tokens, id)
+		} else if len(parts) == 2 && (parts[1] == "headers" || parts[1] == "refresh") {
+			if d.provider != nil && (d.tokens[id] == "" || parts[1] == "refresh") {
+				req, _ := http.NewRequest(http.MethodGet, d.provider.URL+"/api/auth/session", nil)
+				req.Header.Set("Cookie", d.cookies[id])
+				response, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(503)
+					return
+				}
+				var session struct {
+					Token string `json:"token"`
+				}
+				err = json.NewDecoder(response.Body).Decode(&session)
+				response.Body.Close()
+				if err != nil || session.Token == "" {
+					w.WriteHeader(401)
+					_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "reauth_required"}})
+					return
+				}
+				d.tokens[id] = session.Token
+				for _, cookie := range response.Cookies() {
+					if cookie.Name == "__Secure-next-auth.session-token" {
+						d.cookies[id] = cookie.Name + "=" + cookie.Value
+					}
+				}
+			}
+			if parts[1] == "refresh" {
+				_ = json.NewEncoder(w).Encode(meta)
+				return
+			}
 			var in map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in["url"] != os.Getenv("WALLAPOP_API_BASE_URL") {
 				t.Error("wrong target passed to Galleton headers")
@@ -146,7 +183,11 @@ func TestGalletonLoginStoresOnlyReferenceAndReusesIt(t *testing.T) {
 
 func TestGalletonMigratesLegacyCookieOnce(t *testing.T) {
 	h := newHarness(t)
-	h.login()
+	if err := config.SaveCredentials(h.credentialsPath(), config.Credentials{Profiles: map[string]config.Session{
+		"default": {SessionCookie: fakewallapop.RotatedCookie, Name: "Test User", UserHash: fakewallapop.UserHash},
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	d := enableGalleton(t)
 	h.must("", "auth", "status", "--check")
 	if s := managedCredentials(t, h).Profiles["default"]; s.GalletonID == "" || s.SessionCookie != "" {
@@ -158,7 +199,7 @@ func TestGalletonMigratesLegacyCookieOnce(t *testing.T) {
 	if len(d.imports) != 1 || !strings.Contains(d.imports[0].CookieHeader, fakewallapop.RotatedCookie) || d.imports[0].Replace {
 		t.Fatal("migration must import the saved cookie once, without replacement")
 	}
-	if len(h.fake.RequestsTo("/api/auth/session")) != 1 {
+	if len(h.fake.RequestsTo("/api/auth/session")) != 0 {
 		t.Fatal("CLI minted locally after migration")
 	}
 }

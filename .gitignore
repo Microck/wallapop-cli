@@ -11,3 +11,7 @@ docs-site/*.tsbuildinfo
 
 # Scratch worktrees used by parallel agents
 .claude/worktrees/
+
+# Generated, platform-specific embedded session engines
+/internal/galleton/bundle/*.bin
+/internal/galleton/bundle/payload_*.go

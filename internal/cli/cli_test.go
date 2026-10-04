@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -25,9 +24,10 @@ import (
 // an isolated XDG home. Every test goes through here; nothing reaches into
 // package internals.
 type harness struct {
-	t    *testing.T
-	fake *fakewallapop.Server
-	home string
+	t      *testing.T
+	fake   *fakewallapop.Server
+	home   string
+	daemon *fakeGalleton
 }
 
 func newHarness(t *testing.T) *harness {
@@ -46,7 +46,9 @@ func newHarness(t *testing.T) *harness {
 	for k, v := range fake.Env() {
 		t.Setenv(k, v)
 	}
-	return &harness{t: t, fake: fake, home: home}
+	d := enableGalleton(t)
+	d.provider = fake
+	return &harness{t: t, fake: fake, home: home, daemon: d}
 }
 
 type result struct {
@@ -181,9 +183,9 @@ func TestLoginImportsCookieSeedsLocationAndProtectsCredentials(t *testing.T) {
 		t.Fatalf("credentials mode = %o, want 600", info.Mode().Perm())
 	}
 	raw, _ := os.ReadFile(h.credentialsPath())
-	// The mint rotates the cookie; the newest one must be what is stored.
-	if !strings.Contains(string(raw), fakewallapop.RotatedCookie) {
-		t.Fatalf("rotated cookie not persisted:\n%s", raw)
+	// Rotation now lives exclusively in Galleton, not credentials.toml.
+	if strings.Contains(string(raw), fakewallapop.RotatedCookie) || strings.Contains(string(raw), fakewallapop.ValidCookie) || !strings.Contains(string(raw), "galleton_id") {
+		t.Fatalf("expected only a managed reference, got:\n%s", raw)
 	}
 	if strings.Contains(string(raw), "userConsentSent") {
 		t.Fatal("unrelated cookies must not be stored")
@@ -937,24 +939,27 @@ func TestSessionTokenEnvOverridesCredentials(t *testing.T) {
 
 // session
 
-func TestWatchCheckMintsOnceToKeepSessionAliveOnlyWhenLoggedIn(t *testing.T) {
+func TestWatchCheckUsesManagedTokenAndWarnsWhenRenewalFails(t *testing.T) {
 	h := newHarness(t)
 	h.login()
 	h.must("", "watch", "add", "search", "bike", "--name", "bikes")
 	mints := len(h.fake.RequestsTo("/api/auth/session"))
 
-	// Search watches are public, so the only reason to mint is the keepalive.
+	// The managed daemon can reuse a still-valid token across CLI invocations.
 	h.must("", "watch", "check", "--all")
-	if got := len(h.fake.RequestsTo("/api/auth/session")) - mints; got != 1 {
-		t.Fatalf("watch check minted %d times, want exactly 1", got)
+	if got := len(h.fake.RequestsTo("/api/auth/session")) - mints; got != 0 {
+		t.Fatalf("watch check should reuse the daemon token, got %d renewals", got)
 	}
 	raw, _ := os.ReadFile(h.credentialsPath())
-	if !strings.Contains(string(raw), "session_expires") {
-		t.Fatalf("keepalive must persist the rotated cookie's expiry:\n%s", raw)
+	if strings.Contains(string(raw), "session_cookie") || !strings.Contains(string(raw), "galleton_id") {
+		t.Fatalf("expected a managed session reference:\n%s", raw)
 	}
 
 	// A rejected session is a warning: the watches still ran, exit stays 0.
 	h.fake.MintEmpty = true
+	h.daemon.mu.Lock()
+	h.daemon.tokens = map[string]string{}
+	h.daemon.mu.Unlock()
 	r := h.must("", "watch", "check", "--all")
 	if !strings.Contains(r.stderr, "keepalive") || !strings.Contains(r.stderr, "auth login") {
 		t.Fatalf("expected a keepalive warning on stderr, got: %q", r.stderr)
@@ -969,45 +974,24 @@ func TestWatchCheckMintsOnceToKeepSessionAliveOnlyWhenLoggedIn(t *testing.T) {
 	}
 }
 
-func TestAuthRefreshReportsNewExpiryAndAuthStatusShowsIt(t *testing.T) {
+func TestAuthRefreshUsesDaemonAndDoesNotInventCookieExpiry(t *testing.T) {
 	h := newHarness(t)
 	h.login()
 	mints := len(h.fake.RequestsTo("/api/auth/session"))
-	// Age the stored expiry so a refresh that failed to persist would show.
-	raw, _ := os.ReadFile(h.credentialsPath())
-	stale := regexp.MustCompile(`session_expires = .*`).ReplaceAll(raw, []byte("session_expires = 2020-01-01T00:00:00Z"))
-	if err := os.WriteFile(h.credentialsPath(), stale, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
 	r := h.must("", "auth", "refresh")
-	var out struct {
-		Profile        string     `json:"profile"`
-		Account        string     `json:"account"`
-		SessionExpires *time.Time `json:"session_expires"`
-	}
-	decode(t, r.stdout, &out)
-	if out.Profile != "default" || out.Account == "" || out.SessionExpires == nil {
-		t.Fatalf("auth refresh output: %s", r.stdout)
-	}
-	if time.Until(*out.SessionExpires) < 29*24*time.Hour {
-		t.Fatalf("expiry should come from the rotated cookie (~30 days), got %s", out.SessionExpires)
+	if !strings.Contains(r.stdout, `"source": "galleton"`) || strings.Contains(r.stdout, "session_expires") {
+		t.Fatalf("managed refresh must not invent cookie expiry: %s", r.stdout)
 	}
 	if got := len(h.fake.RequestsTo("/api/auth/session")) - mints; got != 1 {
-		t.Fatalf("auth refresh minted %d times, want 1", got)
+		t.Fatalf("explicit renewal calls = %d, want 1", got)
 	}
 	r = h.must("", "auth", "status")
-	var st struct {
-		SessionExpires *time.Time `json:"session_expires"`
+	if strings.Contains(r.stdout, "session_expires") {
+		t.Fatal("cookie expiry is not exposed by the daemon")
 	}
-	decode(t, r.stdout, &st)
-	if st.SessionExpires == nil || !st.SessionExpires.Equal(*out.SessionExpires) {
-		t.Fatalf("auth status should show the stored expiry %s, got %s", out.SessionExpires, r.stdout)
-	}
-
 	h.fake.MintEmpty = true
 	if r := h.run("", "auth", "refresh"); r.code != 3 {
-		t.Fatalf("rejected session should exit 3, got %d: %s", r.code, r.stderr)
+		t.Fatalf("invalid session exit %d: %s", r.code, r.stderr)
 	}
 }
 

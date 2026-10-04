@@ -20,6 +20,7 @@ func TestManagedSessionRetriesLocalPersistenceWithoutReimport(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet:
 			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":{"code":"not_found"}}`))
 		case r.Method == http.MethodPut:
 			imports++
 			_ = json.NewEncoder(w).Encode(galleton.Metadata{ID: "test", Provider: "wallapop"})

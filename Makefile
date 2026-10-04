@@ -1,7 +1,8 @@
 .PHONY: build test check fmt vet lint install docs docs-check
 
 build:
-	go build -o bin/wallapop ./cmd/wallapop
+	go run ./cmd/bundle-galleton
+	go build -tags galleton_bundle -o bin/wallapop ./cmd/wallapop
 
 test:
 	go test ./... -count=1
@@ -29,4 +30,5 @@ docs-check: docs
 	test -z "$$(git ls-files --others --exclude-standard -- docs-site/content/docs/reference)"
 
 install:
-	go install -ldflags "-X main.version=$$(git describe --tags --always --dirty)" ./cmd/wallapop
+	go run ./cmd/bundle-galleton
+	go install -tags galleton_bundle -ldflags "-X main.version=$$(git describe --tags --always --dirty)" ./cmd/wallapop
