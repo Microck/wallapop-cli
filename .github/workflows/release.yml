@@ -30,10 +30,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # Manual retries keep the source tag intact but use packaging fixes from
+      # the selected workflow ref (the same approach as npm_only recovery).
+      - name: prepare release configuration
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: git show "$WORKFLOW_SHA:.goreleaser.yaml" > "$RUNNER_TEMP/goreleaser.yaml"
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --config ${{ runner.temp }}/goreleaser.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Token with write access to Microck/homebrew-tap and Microck/scoop-bucket.
