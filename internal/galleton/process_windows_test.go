@@ -19,7 +19,7 @@ func TestNoWindowPreservesProcessAttributes(t *testing.T) {
 	}
 }
 
-func TestNoWindowChildHasNoConsole(t *testing.T) {
+func TestNoWindowChildHasNoConsoleWindow(t *testing.T) {
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -41,15 +41,14 @@ func TestNoWindowHelperProcess(t *testing.T) {
 	if os.Getenv("WALLAPOP_TEST_NO_WINDOW") != "1" {
 		return
 	}
-	kernel := windows.NewLazySystemDLL("kernel32.dll")
-	for _, name := range []string{"GetConsoleWindow", "GetConsoleCP"} {
-		proc := kernel.NewProc(name)
-		if err := proc.Find(); err != nil {
-			t.Fatal(err)
-		}
-		result, _, _ := proc.Call()
-		if result != 0 {
-			t.Fatalf("%s = %d: child has a console", name, result)
-		}
+	// CREATE_NO_WINDOW suppresses the console window, not the console's code
+	// page. GetConsoleCP may still succeed for a windowless console process.
+	proc := windows.NewLazySystemDLL("kernel32.dll").NewProc("GetConsoleWindow")
+	if err := proc.Find(); err != nil {
+		t.Fatal(err)
+	}
+	window, _, _ := proc.Call()
+	if window != 0 {
+		t.Fatalf("child has a console window: %d", window)
 	}
 }
