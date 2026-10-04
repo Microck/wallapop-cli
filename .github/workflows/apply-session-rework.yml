@@ -1,0 +1,46 @@
+name: apply-session-rework
+
+on:
+  push:
+    branches: [rework/galleton-cli-managed]
+    paths: [.github/workflows/apply-session-rework.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apply-session-rework
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.repository == 'Microck/wallapop-cli'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Apply checksum-verified locally tested implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 56dd7ea7111dcfa90acb19afa92b6926448398dc
+          cat .rework-1.part .rework-2.part .rework-3.part > "$RUNNER_TEMP/session-rework.xz"
+          echo "86b7fefc1dd1a56c3a71f8e909b07168d0ef27ce6ebbd74d45ce89be10e1f06f  $RUNNER_TEMP/session-rework.xz" | sha256sum --check
+          xz -dc "$RUNNER_TEMP/session-rework.xz" > "$RUNNER_TEMP/session-rework.patch"
+          git apply --check "$RUNNER_TEMP/session-rework.patch"
+          git apply "$RUNNER_TEMP/session-rework.patch"
+          go mod tidy
+          go run ./cmd/docsgen
+          test -z "$(gofmt -l internal cmd)"
+          git diff --check
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(auth): bundle and automatically manage the pinned Galleton engine'
+          git push origin HEAD:rework/galleton-cli-managed
