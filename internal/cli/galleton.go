@@ -51,7 +51,7 @@ func (s *managedSession) initialize(ctx context.Context) error {
 		return err
 	}
 	if exists && (meta.ID != s.id || meta.Provider != "wallapop") {
-		return errors.New("Galleton session does not belong to the wallapop provider")
+		return errors.New("galleton session does not belong to the wallapop provider")
 	}
 	if !exists || s.replace {
 		if s.cookie == "" {
@@ -75,7 +75,7 @@ func (s *managedSession) initialize(ctx context.Context) error {
 			return err
 		}
 		if meta.ID != s.id || meta.Provider != "wallapop" {
-			return errors.New("Galleton returned unexpected session metadata")
+			return errors.New("galleton returned unexpected session metadata")
 		}
 	}
 	s.cookie = ""
@@ -103,14 +103,14 @@ func (s *managedSession) accessToken(ctx context.Context) (string, error) {
 	for key, value := range h.Headers {
 		if strings.EqualFold(key, "Authorization") {
 			if authorization != "" {
-				return "", managedError(errors.New("Galleton returned duplicate authorization headers"))
+				return "", managedError(errors.New("galleton returned duplicate authorization headers"))
 			}
 			authorization = value
 		}
 	}
 	parts := strings.Fields(authorization)
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || strings.ContainsAny(authorization, "\r\n") {
-		return "", managedError(errors.New("Galleton did not return a bearer token; check the wallapop adapter"))
+		return "", managedError(errors.New("galleton did not return a bearer token; check the wallapop adapter"))
 	}
 	if s.redact != nil && parts[1] != s.lastToken {
 		s.redact(parts[1])
@@ -118,7 +118,7 @@ func (s *managedSession) accessToken(ctx context.Context) (string, error) {
 	}
 	if s.onReady != nil {
 		if err := s.onReady(); err != nil {
-			return "", fmt.Errorf("Galleton holds the session, but local migration could not be saved (retry the command): %w", err)
+			return "", fmt.Errorf("galleton holds the session, but local migration could not be saved (retry the command): %w", err)
 		}
 		s.onReady = nil
 	}

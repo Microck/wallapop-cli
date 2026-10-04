@@ -32,7 +32,7 @@ func build(all bool) error {
 		return err
 	}
 	if mod.Sum != bundle.Sum || mod.GoModSum != bundle.ModSum {
-		return fmt.Errorf("Galleton module checksum mismatch")
+		return fmt.Errorf("galleton module checksum mismatch")
 	}
 	targets := [][2]string{{runtime.GOOS, runtime.GOARCH}}
 	if all {

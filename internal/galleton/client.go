@@ -71,11 +71,11 @@ func New(base, token string) (*Client, error) {
 	}
 	u, err := url.Parse(base)
 	if err != nil || u.ForceQuery {
-		return nil, errors.New("Galleton URL must be a plain loopback HTTP origin")
+		return nil, errors.New("galleton URL must be a plain loopback HTTP origin")
 	}
 	client, err := sdk.New(base, token)
 	if err != nil {
-		return nil, errors.New("Galleton requires a literal loopback HTTP origin and a nonempty single-line API token")
+		return nil, errors.New("galleton requires a literal loopback HTTP origin and a nonempty single-line API token")
 	}
 	return &Client{sdk: client}, nil
 }
@@ -91,7 +91,7 @@ func safeError(ctx context.Context, err error) error {
 	if errors.As(err, &e) {
 		return &Error{Status: e.Status, Code: e.Code}
 	}
-	return errors.New("Galleton could not complete the operation; it may already have completed. Run `wallapop auth service status` before retrying")
+	return errors.New("galleton could not complete the operation; it may already have completed. Run `wallapop auth service status` before retrying")
 }
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
