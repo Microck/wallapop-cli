@@ -252,4 +252,8 @@ func Replace(path string, binary []byte) error {
 	return nil
 }
 
-func Client() *http.Client { return &http.Client{Timeout: 30 * time.Second} }
+func Client() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	return &http.Client{Transport: transport}
+}
