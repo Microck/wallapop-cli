@@ -81,6 +81,9 @@ func Execute(version string, args []string, stdin io.Reader, stdout, stderr io.W
 
 	cmd, err := root.ExecuteContextC(ctx)
 	if err == nil {
+		if cmd != nil {
+			app.maybeUpdate(ctx, cmd)
+		}
 		return 0
 	}
 	if errors.Is(err, context.Canceled) || ctx.Err() != nil {
@@ -150,7 +153,7 @@ Agent usage: wallapop skills get wallapop-usage`,
 		a.chatCmd(),
 		a.mcpCmd(),
 		a.watchCmd(), a.sinkCmd(),
-		a.configCmd(), a.doctorCmd(), a.skillsCmd(),
+		a.configCmd(), a.doctorCmd(), a.skillsCmd(), a.updateCmd(),
 	)
 	return root
 }
@@ -168,6 +171,15 @@ func (a *App) setup(cmd *cobra.Command) error {
 	if a.flagErrorFormat != "text" && a.flagErrorFormat != "json" {
 		return output.Usagef("--error-format must be text or json")
 	}
+	stdoutFile, _ := a.Stdout.(*os.File)
+	stdinFile, _ := a.Stdin.(*os.File)
+	stderrFile, _ := a.Stderr.(*os.File)
+	a.Interactive = !a.flagNoInput && output.IsTerminal(stdinFile) && output.IsTerminal(stdoutFile) && output.IsTerminal(stderrFile)
+	a.Printer = output.Printer{W: a.Stdout, Format: format, Color: output.ColorEnabled(a.flagNoColor, stdoutFile)}
+
+	if cmd.Name() == "update" {
+		return nil
+	}
 	a.Paths = config.DefaultPaths()
 	a.Cfg, err = config.Load(a.Paths.ConfigFile)
 	if err != nil {
@@ -179,12 +191,6 @@ func (a *App) setup(cmd *cobra.Command) error {
 	}
 	a.loadedCreds = config.CloneCredentials(a.Creds)
 	a.Profile = config.ResolveProfile(a.flagProfile, a.Cfg)
-
-	stdoutFile, _ := a.Stdout.(*os.File)
-	stdinFile, _ := a.Stdin.(*os.File)
-	stderrFile, _ := a.Stderr.(*os.File)
-	a.Interactive = !a.flagNoInput && output.IsTerminal(stdinFile) && output.IsTerminal(stdoutFile) && output.IsTerminal(stderrFile)
-	a.Printer = output.Printer{W: a.Stdout, Format: format, Color: output.ColorEnabled(a.flagNoColor, stdoutFile)}
 
 	a.Client = wallapop.New(a.Version)
 	if a.flagDebug {

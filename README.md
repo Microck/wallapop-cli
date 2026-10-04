@@ -139,6 +139,16 @@ export WALLAPOP_SESSION_TOKEN="..."
 wallapop search "bici" --format jsonl
 ```
 
+## updates
+
+```bash
+wallapop update
+wallapop update --check
+wallapop update --yes
+```
+
+interactive commands check for a new stable release at most once a day and ask `Update? [Y/n]`. scripts, MCP, and `--no-input` never prompt or check automatically. set `WALLAPOP_NO_UPDATE_CHECK=1` to disable automatic checks. npm, Homebrew, Scoop, and AUR installs update through their package manager; direct binaries use checksum-verified release archives. development and prerelease builds are not replaced.
+
 ## auth model
 
 | credential | where it comes from | what it unlocks |
