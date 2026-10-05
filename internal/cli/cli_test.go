@@ -360,6 +360,71 @@ func TestItemShowPrefersDetailOverAStalePage(t *testing.T) {
 	}
 }
 
+// Image extraction must keep the detail gallery order, even when the page
+// has an older gallery, and plain output must contain only complete links.
+func TestItemImages(t *testing.T) {
+	h := newHarness(t)
+	it := h.fake.AddItem(fakewallapop.Item{
+		Hash: "hashsssstale", Title: "Fresh", Images: 2, PageImages: 5,
+	})
+	want := []string{"https://cdn/hashsssstale-1.jpg", "https://cdn/hashsssstale-2.jpg"}
+	for _, ref := range []string{it.Hash, "https://es.wallapop.com/item/" + it.Slug} {
+		for _, format := range []string{"json", "jsonl", "pretty", "toon"} {
+			r := h.must("", "item", "images", ref, "--format", format)
+			switch format {
+			case "json":
+				var urls []string
+				decode(t, r.stdout, &urls)
+				if len(urls) != len(want) || urls[0] != want[0] || urls[1] != want[1] {
+					t.Fatalf("image URLs = %v, want %v", urls, want)
+				}
+			case "jsonl":
+				if r.stdout != fmt.Sprintf("%q\n%q\n", want[0], want[1]) {
+					t.Fatalf("JSONL = %q", r.stdout)
+				}
+			case "pretty":
+				if r.stdout != strings.Join(want, "\n")+"\n" {
+					t.Fatalf("plain links = %q", r.stdout)
+				}
+			case "toon":
+				if !strings.Contains(r.stdout, want[0]) || !strings.Contains(r.stdout, want[1]) || strings.Contains(r.stdout, "-3.jpg") {
+					t.Fatalf("TOON = %q", r.stdout)
+				}
+			}
+		}
+		shown := h.must("", "item", "show", ref, "--format", "pretty")
+		for _, url := range want {
+			if !strings.Contains(shown.stdout, url) {
+				t.Fatalf("pretty item omitted %s: %s", url, shown.stdout)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		ref  string
+		code int
+	}{
+		{"1301645280", 2}, {"zzzzzzzzzzzz", 4},
+	} {
+		r := h.run("", "item", "images", tc.ref)
+		if r.code != tc.code || r.stdout != "" {
+			t.Fatalf("images %s: exit %d, stdout %q, stderr %s", tc.ref, r.code, r.stdout, r.stderr)
+		}
+	}
+}
+
+func TestItemImagesEmptyGallery(t *testing.T) {
+	h := newHarness(t)
+	it := h.fake.AddItem(fakewallapop.Item{Hash: "hashnoimages", Images: -1})
+	for _, tc := range []struct{ format, want string }{
+		{"json", "[]\n"}, {"jsonl", ""}, {"pretty", ""},
+	} {
+		r := h.must("", "item", "images", it.Hash, "--format", tc.format)
+		if r.stdout != tc.want {
+			t.Fatalf("empty gallery in %s: got %q, want %q", tc.format, r.stdout, tc.want)
+		}
+	}
+}
+
 func TestItemShowByHashAndByURLAgree(t *testing.T) {
 	h := newHarness(t)
 	it := h.fake.AddItem(fakewallapop.Item{Hash: "hashbbbbbbbb", Title: "Trek Marlin", Price: 300, Reserved: true})

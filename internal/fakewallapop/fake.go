@@ -34,7 +34,7 @@ type Item struct {
 	Description string
 	Price       float64
 	Condition   string
-	Images      int
+	Images      int // zero defaults to one image; negative means an empty gallery
 	// Attrs are the listing's category attributes beyond the common four,
 	// served under type_attributes and rewritten by edits.
 	Attrs map[string]string
@@ -393,7 +393,10 @@ func (s *Server) savedSearches(w http.ResponseWriter, r *http.Request) {
 }
 
 func fakeImages(hash string, n int) []map[string]any {
-	if n <= 0 {
+	if n < 0 {
+		return []map[string]any{}
+	}
+	if n == 0 {
 		n = 1
 	}
 	imgs := make([]map[string]any, 0, n)

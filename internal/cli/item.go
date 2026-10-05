@@ -19,6 +19,16 @@ import (
 	"github.com/Microck/wallapop-cli/internal/wallapop"
 )
 
+// imageURLs keeps the machine formats as a simple array and pretty output
+// suitable for copying or piping, without labels or shortened links.
+type imageURLs []string
+
+func (urls imageURLs) Pretty(w io.Writer, color bool) {
+	for _, url := range urls {
+		fmt.Fprintln(w, url)
+	}
+}
+
 type itemView wallapop.Item
 
 func (v itemView) Pretty(w io.Writer, color bool) {
@@ -58,6 +68,9 @@ func (v itemView) Pretty(w io.Writer, color bool) {
 		rows = append(rows, []string{"modified", it.ModifiedAt.Local().Format(time.RFC3339)})
 	}
 	rows = append(rows, []string{"url", it.URL})
+	for i, url := range it.Images {
+		rows = append(rows, []string{fmt.Sprintf("image %d", i+1), url})
+	}
 	output.Table(w, color, nil, rows)
 	if it.Description != "" {
 		fmt.Fprintln(w)
@@ -81,6 +94,26 @@ es.wallapop.com/item/... URL.`,
 					return err
 				}
 				return a.Printer.Print(itemView(it))
+			},
+		},
+		&cobra.Command{
+			Use: "images ITEM", Short: "Direct image links in gallery order", Args: cobra.ExactArgs(1),
+			Long: `Return direct image URLs for an item hash or full item URL.
+JSON returns an array of URL strings; JSONL returns one JSON string per line.
+Use --format pretty for one plain URL per line. This reads item metadata,
+without downloading the images.
+
+Examples:
+  wallapop item images k2j3h4g5f6d7 --format pretty
+  wallapop item show k2j3h4g5f6d7 | jq -r '.images[]'`,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				it, err := a.Client.Item(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				// A successful item with no images is [], never JSON null.
+				urls := append(imageURLs{}, it.Images...)
+				return a.Printer.Print(urls)
 			},
 		},
 		&cobra.Command{

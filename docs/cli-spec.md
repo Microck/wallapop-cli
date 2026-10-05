@@ -134,6 +134,11 @@ detail with the page flags.
 - The item detail endpoint is the API of record: title, description, condition and price come from it, empty and zero included, and the rendered page contributes only what it alone knows (flags, counters, slug and the full taxonomy path). The page is a cached snapshot and lags writes. Both reference forms take the same merge, so a hash and its URL always report the same listing.
 - `item show ITEM` merges `GET /api/v3/items/{hash}` with the page flags (reserved, sold,
   expired, modified date, views, favorites).
+- `item images ITEM` returns the direct image URLs in gallery order, using the same
+  item read as `item show`. JSON is an array of URL strings; JSONL emits one string
+  per line; pretty emits one unadorned URL per line. No images returns an empty
+  array (or no lines in JSONL/pretty). `item show --format pretty` also lists each
+  image URL without truncation. These commands read metadata, not image bytes.
 - `item open ITEM` opens the web page in the browser.
 - `item favorite ITEM` / `item unfavorite ITEM` via `PUT /api/v3/items/{hash}/favorite`.
 - `item reserve ITEM [--off]`, `item sold ITEM [--yes]`, `item delete ITEM [--yes]` act on the
