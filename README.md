@@ -13,7 +13,9 @@
 
 `wallapop` is a terminal cli for wallapop that lets you search with every filter the web has, watch searches, items, and sellers for changes, and chat with sellers, all from your own account. it compiles to one static Go binary. output is json by default so everything pipes into `jq`. `--format pretty` is for humans.
 
-[documentation](https://wallapop.micr.dev/docs) | [npm](https://www.npmjs.com/package/wallapop-cli) | [github](https://github.com/Microck/wallapop-cli)
+[documentation](https://wallapop.micr.dev/docs) | [command demos](https://wallapop.micr.dev/docs/examples) | [npm](https://www.npmjs.com/package/wallapop-cli) | [github](https://github.com/Microck/wallapop-cli)
+
+![search demo](images/demos/search.gif)
 
 ## why
 
@@ -102,9 +104,9 @@ wallapop auth login --cookies ~/Downloads/cookies.txt
 cat cookies.txt | wallapop auth login --cookies-stdin
 ```
 
-the cli starts its bundled Galleton engine automatically, imports the session, and stores rotated credentials in a private encrypted vault. `credentials.toml` holds a session reference and account metadata, not the managed cookie. existing saved sessions migrate on their next authenticated use. your account location becomes the default search centre.
+the cli imports the session and stores rotated credentials in a private encrypted vault. `credentials.toml` holds a session reference and account metadata, not the managed cookie. existing saved sessions migrate on their next authenticated use. your account location becomes the default search centre.
 
-the engine is shared by concurrent cli, watch, and MCP commands and stops shortly after its last client exits. no separate `galleton serve`, environment variables, or startup service are required. renewal still respects Wallapop expiry, revocation, and reauthentication requirements.
+Wallapop can still expire or revoke a session, so you may need to log in again.
 
 for renewal between commands, explicitly enable startup at OS login:
 
@@ -215,6 +217,24 @@ wallapop chat start k2j3h4g5f6d7 "Hola, ¿sigue disponible?"
 echo "Te lo dejo en 200" | wallapop chat send 8f1c2 -
 wallapop chat open 8f1c2
 ```
+
+## what it looks like
+
+these recordings use public listings. the watch writes only to its isolated local demo database. see the [command demo gallery](https://wallapop.micr.dev/docs/examples) for search, filters, item details, and watch events.
+
+### inspect a listing
+
+![item demo](images/demos/item.gif)
+
+### discover and apply category filters
+
+![category filters demo](images/demos/filters.gif)
+
+### track changes with a watch
+
+Watches save a Search locally; each Check reports changes.
+
+![watch demo](images/demos/watch.gif)
 
 ## sinks config
 
