@@ -104,9 +104,9 @@ wallapop auth login --cookies ~/Downloads/cookies.txt
 cat cookies.txt | wallapop auth login --cookies-stdin
 ```
 
-the cli starts its bundled Galleton engine automatically, imports the session, and stores rotated credentials in a private encrypted vault. `credentials.toml` holds a session reference and account metadata, not the managed cookie. existing saved sessions migrate on their next authenticated use. your account location becomes the default search centre.
+the cli imports the session and stores rotated credentials in a private encrypted vault. `credentials.toml` holds a session reference and account metadata, not the managed cookie. existing saved sessions migrate on their next authenticated use. your account location becomes the default search centre.
 
-the engine is shared by concurrent cli, watch, and MCP commands and stops shortly after its last client exits. no separate `galleton serve`, environment variables, or startup service are required. renewal still respects Wallapop expiry, revocation, and reauthentication requirements.
+Wallapop can still expire or revoke a session, so you may need to log in again.
 
 for renewal between commands, explicitly enable startup at OS login:
 
