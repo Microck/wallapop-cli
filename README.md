@@ -169,7 +169,7 @@ eligible interactive commands check for a new stable release at most once a day 
 | `search [keywords] [--filter k=v]...` | search around your location; `search filters` lists valid keys |
 | `category list` | category ids |
 | `alert list` | your saved searches on wallapop; `watch add search --from-alert ID --name NAME` turns one into a watch |
-| `item show / open / favorite / unfavorite` | inspect a listing by hash or url |
+| `item show / images / open / favorite / unfavorite` | inspect a listing by hash or url |
 | `item reserve / sold / delete` | act on your own listings (`sold`, `delete` ask or need `--yes`) |
 | `user show / items / reviews` | look at a seller by hash, url or slug |
 | `me show / items / favorites` | your account |
@@ -207,6 +207,7 @@ wallapop completion powershell >> $PROFILE
 wallapop search "thinkpad x1" --max-price 400 --sort newest --format pretty
 wallapop search --category 100 --filter brand=Toyota --filter max_km=120000 --limit 20
 wallapop item show https://es.wallapop.com/item/thinkpad-x1-carbon-1092837465
+wallapop item images https://es.wallapop.com/item/thinkpad-x1-carbon-1092837465 --format pretty
 
 wallapop watch add search "thinkpad x1" --max-price 400 --name x1 --notify phone
 wallapop watch check --all --format jsonl | jq -r 'select(.type=="item.price_changed") | .item.url'

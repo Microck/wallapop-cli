@@ -81,6 +81,24 @@ Add the listing to your favorites
 wallapop item favorite ITEM
 ```
 
+## `wallapop item images`
+
+Direct image links in gallery order
+
+```bash
+wallapop item images ITEM
+```
+
+Return direct image URLs for an item hash or full item URL.
+JSON returns an array of URL strings; JSONL returns one JSON string per line.
+Use --format pretty for one plain URL per line. This reads item metadata,
+without downloading the images.
+
+```bash
+wallapop item images k2j3h4g5f6d7 --format pretty
+wallapop item show k2j3h4g5f6d7 | jq -r '.images[]'
+```
+
 ## `wallapop item open`
 
 Open the listing in the browser
