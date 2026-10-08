@@ -347,6 +347,7 @@ func (a *App) itemEditCmd() *cobra.Command {
 	var price float64
 	var images []string
 	var attrs []string
+	var categoryID int
 	cmd := &cobra.Command{
 		Use:   "edit ITEM",
 		Short: "Change title, description, price, condition or images on your listing",
@@ -356,8 +357,11 @@ func (a *App) itemEditCmd() *cobra.Command {
 				return err
 			}
 			fl := cmd.Flags()
-			if !fl.Changed("title") && !fl.Changed("description") && !fl.Changed("price") && !fl.Changed("condition") && len(attrs) == 0 && len(images) == 0 {
-				return output.Usagef("nothing to change. Pass at least one of --title, --description, --price, --condition, --attr, --image")
+			if !fl.Changed("title") && !fl.Changed("description") && !fl.Changed("price") && !fl.Changed("condition") && !fl.Changed("category") && len(attrs) == 0 && len(images) == 0 {
+				return output.Usagef("nothing to change. Pass at least one of --title, --description, --price, --condition, --category, --attr, --image")
+			}
+			if fl.Changed("category") && categoryID <= 0 {
+				return output.Usagef("--category must be a positive leaf category id")
 			}
 			hash, err := a.ownedItemHash(cmd.Context(), args[0])
 			if err != nil {
@@ -376,6 +380,13 @@ func (a *App) itemEditCmd() *cobra.Command {
 			if fl.Changed("condition") {
 				in.Condition = &condition
 			}
+			if fl.Changed("category") {
+				// The item detail exposes the taxonomy path, not the leaf id,
+				// and the path can fail to resolve when Wallapop localizes
+				// category names differently between endpoints. Let the
+				// caller pin the leaf explicitly.
+				in.CategoryLeaf = categoryID
+			}
 			if len(attrs) > 0 {
 				it, err := a.Client.Item(cmd.Context(), hash)
 				if err != nil {
@@ -385,8 +396,12 @@ func (a *App) itemEditCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				cat, err := wallapop.ResolveCreateCategory(cats, it.Category)
-				if err != nil && it.CategoryID != 0 {
+				category := it.Category
+				if fl.Changed("category") {
+					category = strconv.Itoa(categoryID)
+				}
+				cat, err := wallapop.ResolveCreateCategory(cats, category)
+				if err != nil && !fl.Changed("category") && it.CategoryID != 0 {
 					// Fall back to the numeric id when the name no longer resolves.
 					cat, err = wallapop.ResolveCreateCategory(cats, strconv.Itoa(it.CategoryID))
 				}
@@ -426,6 +441,7 @@ func (a *App) itemEditCmd() *cobra.Command {
 	cmd.Flags().StringVar(&condition, "condition", "", "new condition")
 	cmd.Flags().StringArrayVar(&images, "image", nil, "replacement image files (repeatable)")
 	cmd.Flags().StringArrayVar(&attrs, "attr", nil, "category attribute key=value (repeatable)")
+	cmd.Flags().IntVar(&categoryID, "category", 0, "leaf category id (see wallapop category list); skips taxonomy resolution")
 	return cmd
 }
 
