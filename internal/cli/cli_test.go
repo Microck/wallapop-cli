@@ -1223,6 +1223,17 @@ func TestItemCreatePublishesWithImages(t *testing.T) {
 	if total != 2 {
 		t.Fatalf("uploaded pictures = %d, want 2", total)
 	}
+	// The create carries only the first picture; the rest go to the created
+	// item's picture2 endpoint, the way the web's upload queue does.
+	var picture2 int
+	for _, rq := range h.fake.RequestsUnder("/api/v3/items/" + created.Hash) {
+		if strings.HasSuffix(rq.Path, "/picture2") && rq.Method == "POST" {
+			picture2++
+		}
+	}
+	if picture2 != 1 {
+		t.Fatalf("picture2 calls = %d, want 1", picture2)
+	}
 	listed := h.must("", "me", "items")
 	if !strings.Contains(listed.stdout, created.Hash) {
 		t.Fatalf("created item missing from me items:\n%s", listed.stdout)

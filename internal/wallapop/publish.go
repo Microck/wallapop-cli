@@ -119,11 +119,31 @@ func (c *Client) CreateItem(ctx context.Context, in CreateInput) (Item, error) {
 	var out struct {
 		ID string `json:"id"`
 	}
-	if err := c.writeItem(ctx, http.MethodPost, "/api/v3/items", UploadAccept, payload, in.Images, &out); err != nil {
+	// The create call carries only the first image: Wallapop reads a single
+	// `image` part here and the web app uploads the rest of the gallery to
+	// the created item afterwards (see uploadRemainingImages in its upload
+	// service). Extra parts are silently ignored.
+	createImages := in.Images
+	if len(createImages) > 1 {
+		createImages = createImages[:1]
+	}
+	if err := c.writeItem(ctx, http.MethodPost, "/api/v3/items", UploadAccept, payload, createImages, &out); err != nil {
 		return Item{}, err
 	}
 	if out.ID == "" {
 		return Item{}, &Error{Kind: KindAPIChanged, Endpoint: "POST /api/v3/items", Msg: "wallapop returned no item id"}
+	}
+	// Gallery order: the create consumed position 0, the rest go to
+	// picture2 with their 1-based positions. A failure here leaves a live
+	// listing missing pictures, so report it but keep the item.
+	var picErr error
+	for i, img := range imagesFrom(in.Images, 1) {
+		if err := c.uploadItemPicture(ctx, out.ID, i+1, img); err != nil {
+			if c.Notice != nil {
+				c.Notice(fmt.Sprintf("published %s, but picture %d failed to upload: %v", out.ID, i+2, err))
+			}
+			picErr = err
+		}
 	}
 	// The listing exists from here on. A fresh hash can take a moment to be
 	// readable, and failing the command over that would invite a retry that
@@ -133,13 +153,13 @@ func (c *Client) CreateItem(ctx context.Context, in CreateInput) (Item, error) {
 		if c.Notice != nil {
 			c.Notice("published " + out.ID + ", but reading it back failed: " + err.Error())
 		}
-		return in.published(out.ID), nil
+		return in.published(out.ID), picErr
 	}
 	// A page 404 makes Client.Item infer "expired", which is right for a
 	// listing Wallapop has hidden and wrong for one published seconds ago:
 	// there the page simply has not propagated yet.
 	it.Expired = false
-	return it, nil
+	return it, picErr
 }
 
 // published describes a listing straight from what was sent, for the window
@@ -226,8 +246,23 @@ func (c *Client) EditItem(ctx context.Context, hash, ownerHash string, in EditIn
 		payload["location"] = map[string]any{"latitude": current.Location.Lat, "longitude": current.Location.Lng, "approximated": false}
 	}
 	var out any
-	if err := c.writeItem(ctx, http.MethodPut, "/api/v3/items/"+current.Hash, UploadAccept, payload, in.Images, &out); err != nil {
+	editImages := in.Images
+	if len(editImages) > 1 {
+		editImages = editImages[:1]
+	}
+	if err := c.writeItem(ctx, http.MethodPut, "/api/v3/items/"+current.Hash, UploadAccept, payload, editImages, &out); err != nil {
 		return Item{}, ownWriteError(err)
+	}
+	// Like create: the write replaces the gallery with the first image, the
+	// rest go through picture2 in gallery order.
+	var picErr error
+	for i, img := range imagesFrom(in.Images, 1) {
+		if err := c.uploadItemPicture(ctx, current.Hash, i+1, img); err != nil {
+			if c.Notice != nil {
+				c.Notice(fmt.Sprintf("edited %s, but picture %d failed to upload: %v", current.Hash, i+2, err))
+			}
+			picErr = err
+		}
 	}
 	// The edit has landed. Like a create, failing the command because the
 	// read-back raced the API would invite a pointless retry, so fall back to
@@ -245,9 +280,9 @@ func (c *Client) EditItem(ctx context.Context, hash, ownerHash string, in EditIn
 			// them would be worse than reporting none.
 			current.Images = nil
 		}
-		return current, nil
+		return current, picErr
 	}
-	return it, nil
+	return it, picErr
 }
 
 // editLeafID recovers the listing's leaf category for the write payload.
@@ -527,4 +562,13 @@ func leafName(path string) string {
 		return strings.TrimSpace(path[i+1:])
 	}
 	return strings.TrimSpace(path)
+}
+
+// imagesFrom returns the slice starting at index start without panicking on
+// short slices.
+func imagesFrom(imgs []UploadImage, start int) []UploadImage {
+	if start >= len(imgs) {
+		return nil
+	}
+	return imgs[start:]
 }

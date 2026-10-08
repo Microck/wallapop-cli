@@ -154,6 +154,7 @@ Agent usage: wallapop skills get wallapop-usage`,
 		a.mcpCmd(),
 		a.watchCmd(), a.sinkCmd(),
 		a.configCmd(), a.doctorCmd(), a.skillsCmd(), a.updateCmd(),
+		a.debugStepsCmd(),
 	)
 	return root
 }

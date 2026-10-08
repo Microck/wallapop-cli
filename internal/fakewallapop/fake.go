@@ -590,6 +590,37 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		it.Sold = true
 		s.mu.Unlock()
 		w.WriteHeader(204)
+	case action == "picture2" && r.Method == http.MethodPost:
+		// Mirrors the web's upload queue: multipart with one `image` part and
+		// a plain `order` field (1-based gallery position). Appends the image.
+		if !s.authed(w, r) || !s.owned(w, it, 403) {
+			return
+		}
+		mr, err := r.MultipartReader()
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"code": 400, "message": "not multipart"})
+			return
+		}
+		added := 0
+		for {
+			part, err := mr.NextPart()
+			if err != nil {
+				break
+			}
+			if part.FormName() == "image" {
+				_, _ = io.Copy(io.Discard, part)
+				added++
+			}
+		}
+		if added == 0 {
+			writeJSON(w, 400, map[string]any{"code": 400, "message": "image required"})
+			return
+		}
+		s.mu.Lock()
+		it.Images += added
+		it.Modified = time.Now()
+		s.mu.Unlock()
+		w.WriteHeader(204)
 	case action == "" && r.Method == http.MethodPut:
 		s.editItem(w, r, it)
 	default:
