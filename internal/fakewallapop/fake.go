@@ -114,6 +114,7 @@ type Server struct {
 	BlockNextAPI  bool // next api.wallapop.com request gets a CloudFront 403
 	MintEmpty     bool // /api/auth/session answers {} (invalid session)
 	MalformedItem bool // /api/v3/items/{hash} answers non-JSON
+	PictureStatus int  // nonzero rejects picture2 uploads
 	CreateCalls   int
 	// NewItemPageLags makes a created listing's rendered page 404 while its
 	// API detail already answers, the propagation window Wallapop really has.
@@ -591,6 +592,10 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		w.WriteHeader(204)
 	case action == "picture2" && r.Method == http.MethodPost:
+		if s.PictureStatus != 0 {
+			writeJSON(w, s.PictureStatus, map[string]any{"message": "picture rejected"})
+			return
+		}
 		// Mirrors the web's upload queue: multipart with one `image` part and
 		// a plain `order` field (1-based gallery position). Appends the image.
 		if !s.authed(w, r) || !s.owned(w, it, 403) {

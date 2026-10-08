@@ -136,13 +136,11 @@ func (c *Client) CreateItem(ctx context.Context, in CreateInput) (Item, error) {
 	// Gallery order: the create consumed position 0, the rest go to
 	// picture2 with their 1-based positions. A failure here leaves a live
 	// listing missing pictures, so report it but keep the item.
-	var picErr error
 	for i, img := range imagesFrom(in.Images, 1) {
 		if err := c.uploadItemPicture(ctx, out.ID, i+1, img); err != nil {
 			if c.Notice != nil {
 				c.Notice(fmt.Sprintf("published %s, but picture %d failed to upload: %v", out.ID, i+2, err))
 			}
-			picErr = err
 		}
 	}
 	// The listing exists from here on. A fresh hash can take a moment to be
@@ -153,13 +151,13 @@ func (c *Client) CreateItem(ctx context.Context, in CreateInput) (Item, error) {
 		if c.Notice != nil {
 			c.Notice("published " + out.ID + ", but reading it back failed: " + err.Error())
 		}
-		return in.published(out.ID), picErr
+		return in.published(out.ID), nil
 	}
 	// A page 404 makes Client.Item infer "expired", which is right for a
 	// listing Wallapop has hidden and wrong for one published seconds ago:
 	// there the page simply has not propagated yet.
 	it.Expired = false
-	return it, picErr
+	return it, nil
 }
 
 // published describes a listing straight from what was sent, for the window
@@ -255,13 +253,11 @@ func (c *Client) EditItem(ctx context.Context, hash, ownerHash string, in EditIn
 	}
 	// Like create: the write replaces the gallery with the first image, the
 	// rest go through picture2 in gallery order.
-	var picErr error
 	for i, img := range imagesFrom(in.Images, 1) {
 		if err := c.uploadItemPicture(ctx, current.Hash, i+1, img); err != nil {
 			if c.Notice != nil {
 				c.Notice(fmt.Sprintf("edited %s, but picture %d failed to upload: %v", current.Hash, i+2, err))
 			}
-			picErr = err
 		}
 	}
 	// The edit has landed. Like a create, failing the command because the
@@ -280,9 +276,9 @@ func (c *Client) EditItem(ctx context.Context, hash, ownerHash string, in EditIn
 			// them would be worse than reporting none.
 			current.Images = nil
 		}
-		return current, picErr
+		return current, nil
 	}
-	return it, picErr
+	return it, nil
 }
 
 // editLeafID recovers the listing's leaf category for the write payload.

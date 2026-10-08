@@ -7,6 +7,8 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1446,5 +1448,96 @@ func TestItemEditNoChangesIsUsageError(t *testing.T) {
 	r := h.run("", "item", "edit", it.Hash)
 	if r.code != 2 {
 		t.Fatalf("exit %d, want 2: %s", r.code, r.stderr)
+	}
+}
+
+// The item already exists when picture2 fails. Keep its id in stdout so
+// callers can recover without publishing a duplicate.
+func TestItemGalleryFailureReturnsPublishedItem(t *testing.T) {
+	for _, action := range []string{"create", "edit"} {
+		t.Run(action, func(t *testing.T) {
+			h := newHarness(t)
+			h.login()
+			img := filepath.Join(h.home, "gallery.png")
+			testPNG(t, img)
+			h.fake.PictureStatus = 500
+			args := []string{"item", action}
+			if action == "create" {
+				args = append(args, "--title", "Bike", "--description", "Bike", "--price", "10", "--category", "17001", "--condition", "good")
+			} else {
+				it := h.fake.AddItem(fakewallapop.Item{Hash: "hasheeeddddz", Title: "Bike", Seller: fakewallapop.UserHash})
+				args = append(args, it.Hash)
+			}
+			args = append(args, "--image", img, "--image", img)
+			r := h.must("", args...)
+			var item struct {
+				Hash   string
+				Images []string
+			}
+			decode(t, r.stdout, &item)
+			if len(item.Hash) != 12 || len(item.Images) != 1 {
+				t.Fatalf("missing published item or wrong gallery: %s", r.stdout)
+			}
+			if !strings.Contains(r.stderr, item.Hash) || !strings.Contains(r.stderr, "picture 2 failed") {
+				t.Fatalf("missing recovery warning: %s", r.stderr)
+			}
+			if action == "create" && h.fake.CreateCalls != 1 {
+				t.Fatalf("creates = %d", h.fake.CreateCalls)
+			}
+		})
+	}
+}
+
+func TestItemEditExplicitCategoryControlsAttrs(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	it := h.fake.AddItem(fakewallapop.Item{Hash: "hasheeeddddy", Title: "Bike", Seller: fakewallapop.UserHash})
+	// Bikes accepts size; Cars accepts brand. The explicit leaf must win.
+	h.must("", "item", "edit", it.Hash, "--category", "100", "--attr", "brand=Volkswagen")
+	if got := h.fake.Items[it.Hash].Attrs["brand"]; got != "Volkswagen" {
+		t.Fatalf("brand = %q", got)
+	}
+	for _, category := range []string{"0", "-1"} {
+		r := h.run("", "item", "edit", it.Hash, "--category", category)
+		if r.code != 2 {
+			t.Fatalf("category %s: exit %d, stderr %s", category, r.code, r.stderr)
+		}
+	}
+}
+
+func TestDebugStepsMissingArguments(t *testing.T) {
+	h := newHarness(t)
+	for _, args := range [][]string{{"get"}, {"upload"}, {"upload", "/api/v3/steps"}} {
+		r := h.run("", append([]string{"debug-steps"}, args...)...)
+		if r.code != 2 {
+			t.Fatalf("args %v: exit %d, stderr %s", args, r.code, r.stderr)
+		}
+	}
+}
+
+func TestDebugStepsPreservesJSONNumbers(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	// Echo the actual HTTP body rather than decode it through float64.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v3/steps" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.Copy(w, r.Body)
+			return
+		}
+		h.fake.Config.Handler.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	t.Setenv("WALLAPOP_API_BASE_URL", server.URL)
+	payload := `{"id":9007199254740993}`
+	file := filepath.Join(h.home, "payload.json")
+	if err := os.WriteFile(file, []byte(payload), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{payload}, {"--payload-file", file}} {
+		r := h.must("", append([]string{"debug-steps"}, args...)...)
+		if strings.TrimSpace(r.stdout) != payload {
+			t.Fatalf("payload changed: %s", r.stdout)
+		}
 	}
 }

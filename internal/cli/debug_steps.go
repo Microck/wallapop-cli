@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Microck/wallapop-cli/internal/output"
 	"github.com/Microck/wallapop-cli/internal/wallapop"
 	"github.com/spf13/cobra"
 )
@@ -22,12 +23,15 @@ func (a *App) debugStepsCmd() *cobra.Command {
 		Long: `Experimental: walk the server-driven listing wizard.
 
   wallapop debug-steps '<json>'            POST the JSON to /api/v3/steps
-  wallapop debug-steps --upload PATH f.jpg [f2.jpg ...]
+  wallapop debug-steps upload PATH f.jpg [f2.jpg ...]
                                            POST multipart images to PATH`,
 		Hidden: true,
 		Args:   cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 && args[0] == "get" {
+				if len(args) != 2 {
+					return output.Usagef("debug-steps get requires one API path")
+				}
 				out, err := a.Client.StepsGetRaw(cmd.Context(), args[1])
 				if err != nil {
 					return err
@@ -35,7 +39,10 @@ func (a *App) debugStepsCmd() *cobra.Command {
 				fmt.Fprintf(a.Stdout, "%s\n", string(out))
 				return nil
 			}
-			if len(args) > 1 && args[0] == "upload" {
+			if len(args) > 0 && args[0] == "upload" {
+				if len(args) < 3 {
+					return output.Usagef("debug-steps upload requires an API path and at least one image")
+				}
 				imgs, err := loadUploadImages(args[2:])
 				if err != nil {
 					return err
@@ -47,7 +54,7 @@ func (a *App) debugStepsCmd() *cobra.Command {
 				fmt.Fprintf(a.Stdout, "%s\n", string(out))
 				return nil
 			}
-			var payload any
+			var payload json.RawMessage
 			if payloadFile != "" {
 				raw, err := os.ReadFile(payloadFile)
 				if err != nil {
@@ -61,7 +68,7 @@ func (a *App) debugStepsCmd() *cobra.Command {
 					return fmt.Errorf("bad payload JSON: %w", err)
 				}
 			} else {
-				payload = map[string]any{}
+				payload = json.RawMessage(`{}`)
 			}
 			out, err := a.Client.StepsRaw(cmd.Context(), payload)
 			if err != nil {
