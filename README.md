@@ -28,7 +28,7 @@ if you already use wallapop and want it in the terminal, this cli gives you a pr
 install the binary with curl:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Microck/wallapop-cli/main/scripts/install.sh | sh
+curl -fsSL https://wallapop.micr.dev/install.sh | sh
 wallapop --version
 ```
 

@@ -1,7 +1,10 @@
 # docs-site
 
 The documentation site for `wallapop-cli`, built with Fumadocs on Next.js. Deployed on Vercel
-as `wallapop-cli`; the `wallapop.micr.dev` DNS record (Netlify NS1) is still missing.
+as `wallapop-cli` at `https://wallapop.micr.dev`.
+
+`/install.sh` rewrites to `scripts/install.sh` on GitHub main. Keep the installer
+in that one source file; the short URL and install examples use it directly.
 
 ```bash
 npm ci
