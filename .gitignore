@@ -7,6 +7,8 @@ dist/
 docs-site/node_modules/
 docs-site/.next/
 docs-site/.source/
+docs-site/out/
+docs-site/public/install.sh
 docs-site/*.tsbuildinfo
 
 # Scratch worktrees used by parallel agents

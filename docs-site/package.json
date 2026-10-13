@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "build": "node --input-type=module -e \"import { copyFileSync } from 'node:fs'; copyFileSync('../scripts/install.sh', 'public/install.sh');\" && next build",
+    "start": "python3 -m http.server 3000 --directory out",
     "typecheck": "tsc --noEmit",
     "postinstall": "fumadocs-mdx"
   },
