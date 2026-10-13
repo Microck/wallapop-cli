@@ -5,7 +5,7 @@ to GitHub Pages at `https://wallapop.micr.dev` by `.github/workflows/pages.yml`.
 
 The build copies `scripts/install.sh` to the exported `/install.sh` URL. Keep the
 installer in that one source file; the short URL and install examples use it directly.
-Search runs in the browser against the generated `/api/search/` index. `/llms.txt`
+Search runs in the browser against the generated `/api/search` index. `/llms.txt`
 is also generated during the build, so the published site needs no running server.
 
 ```bash
@@ -15,6 +15,8 @@ npm run typecheck
 npm run build
 npm start    # serve the static export at http://localhost:3000/docs/
 ```
+
+The static preview command requires Python 3.
 
 `npm ci` runs `fumadocs-mdx` through `postinstall` to generate the content types before
 typechecking or building. CI uses Node.js 22.

@@ -50,17 +50,18 @@ jobs:
           cmp ../scripts/install.sh out/install.sh
           test -s out/docs/index.html
           test -s out/llms.txt
+          test -s out/api/search
           python3 -m http.server 8765 --directory out > /tmp/wallapop-pages-server.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
           for attempt in {1..20}; do
-            curl -fsS -A 'OpenAI File Downloader, XaiImageApiFetch/1.0' http://127.0.0.1:8765/api/search/ -o /tmp/wallapop-search.json && break
+            curl -fsS -A 'OpenAI File Downloader, XaiImageApiFetch/1.0' http://127.0.0.1:8765/api/search -o /tmp/wallapop-search.json && break
             sleep 1
           done
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import { staticClient } from 'fumadocs-core/search/client/orama-static';
-          const client = staticClient({ from: 'http://127.0.0.1:8765/api/search/' });
+          const client = staticClient({ from: 'http://127.0.0.1:8765/api/search' });
           for (const query of ['install', 'watch', 'profile']) {
             const results = await client.search(query);
             assert(results.length > 0, `No static search results for ${query}`);
