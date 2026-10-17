@@ -9,9 +9,9 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-mit-000000?style=flat-square" alt="license badge"></a>
 </p>
 
-<p align="center">
-  <a href=".github/assets/wallapop-cli-v5-en-posterized-12fps-24fps.mp4">watch the latest demo (24 fps)</a>
-</p>
+
+https://github.com/user-attachments/assets/015cb7d9-4363-4f9d-90e0-e6598e996f97
+
 
 ---
 
