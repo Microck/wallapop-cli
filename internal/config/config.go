@@ -71,10 +71,15 @@ type WatchConfig struct {
 }
 
 type Config struct {
-	DefaultProfile string                   `toml:"default_profile,omitempty" json:"default_profile,omitempty"`
-	Profiles       map[string]ProfileConfig `toml:"profiles,omitempty" json:"profiles,omitempty"`
-	Watch          WatchConfig              `toml:"watch,omitempty" json:"watch,omitempty"`
-	Sinks          map[string]SinkConfig    `toml:"sinks,omitempty" json:"sinks,omitempty"`
+	DefaultProfile string `toml:"default_profile,omitempty" json:"default_profile,omitempty"`
+	// Proxy routes all Wallapop traffic, session renewals included, through
+	// http(s)/socks5(h) and never falls back to a direct connection.
+	// WALLAPOP_PROXY overrides it. No credentials here: this file is
+	// world-readable.
+	Proxy    string                   `toml:"proxy,omitempty" json:"proxy,omitempty"`
+	Profiles map[string]ProfileConfig `toml:"profiles,omitempty" json:"profiles,omitempty"`
+	Watch    WatchConfig              `toml:"watch,omitempty" json:"watch,omitempty"`
+	Sinks    map[string]SinkConfig    `toml:"sinks,omitempty" json:"sinks,omitempty"`
 }
 
 // Load reads config.toml. A missing file is an empty config, not an error.

@@ -1,0 +1,24 @@
+{
+  "providers": [
+    {
+      "name": "wallapop",
+      "kind": "http",
+      "origins": ["https://es.wallapop.com", "https://api.wallapop.com"],
+      "refresh_url": "https://es.wallapop.com/api/auth/session",
+      "refresh_method": "GET",
+      "refresh_headers": {
+        "Accept": "application/json",
+        "X-DeviceOS": "0",
+        "User-Agent": "wallapop-cli/galleton (+https://github.com/Microck/wallapop-cli)"
+      },
+      "response": {
+        "access_token_pointer": "/token",
+        "require_set_cookie": true
+      },
+      "refresh_interval_seconds": 240,
+      "refresh_before_seconds": 30,
+      "timeout_seconds": 20,
+      "retry_safe": false
+    }
+  ]
+}

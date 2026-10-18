@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/Microck/wallapop-cli/internal/config"
+	"github.com/Microck/wallapop-cli/internal/galleton"
 	"github.com/Microck/wallapop-cli/internal/output"
 	"github.com/Microck/wallapop-cli/internal/sink"
 	"github.com/Microck/wallapop-cli/internal/store"
@@ -770,11 +771,34 @@ func (a *App) serviceCommandLine() (string, []string, error) {
 // error anywhere. HOME is in the list because it is where the paths come from
 // when the XDG variables are unset, which is the common case.
 // WALLAPOP_SESSION_TOKEN is deliberately absent: it is a secret, and a unit
-// file is world-readable.
+// file is world-readable. WALLAPOP_PROXY goes in, or the timer would talk to
+// Wallapop directly; install refuses one carrying credentials.
 var (
 	serviceEnvXDGKeys = []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"}
-	serviceEnvURLKeys = []string{"WALLAPOP_API_BASE_URL", "WALLAPOP_WEB_BASE_URL", "WALLAPOP_PUBNUB_BASE_URL"}
+	serviceEnvURLKeys = []string{"WALLAPOP_API_BASE_URL", "WALLAPOP_WEB_BASE_URL", "WALLAPOP_PUBNUB_BASE_URL", galleton.ProxyEnv}
 )
+
+// serviceProxyCheck runs before a scheduled job is installed. WALLAPOP_PROXY
+// is copied into unit files, so it must not carry credentials, and a Windows
+// task cannot carry it at all, so the job would connect directly. The config
+// proxy needs neither: the job reads config.toml itself.
+func serviceProxyCheck(windows bool) error {
+	raw := os.Getenv(galleton.ProxyEnv)
+	if raw == "" {
+		return nil
+	}
+	if windows {
+		return output.Usagef("a Windows scheduled task does not get WALLAPOP_PROXY, so it would connect directly. Set the proxy with `wallapop config set proxy URL` and unset WALLAPOP_PROXY")
+	}
+	u, err := wallapop.ParseProxy(raw)
+	if err != nil {
+		return output.Usagef("WALLAPOP_PROXY: %v", err)
+	}
+	if u.User != nil {
+		return output.Usagef("WALLAPOP_PROXY carries credentials, which would land in a unit file. Use a proxy without credentials (for example a local socks5h forwarder) for scheduled runs")
+	}
+	return nil
+}
 
 // serviceEnv freezes the current values of those variables into the unit, so
 // the scheduled run resolves the same paths as the install did. Each group has
@@ -882,6 +906,9 @@ func (a *App) serviceInstall(iv time.Duration) error {
 		return err
 	}
 	u := a.serviceUnit()
+	if err := serviceProxyCheck(runtime.GOOS == "windows"); err != nil {
+		return err
+	}
 	if u == nil {
 		return a.printSchtasks(schtasksCreate(a.serviceUnitName(), exe, args, iv),
 			"scheduled install is not automated on Windows; run the command above in cmd.exe")

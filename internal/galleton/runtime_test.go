@@ -51,7 +51,7 @@ func TestBundledConcurrentStartupAndLeaseLifetime(t *testing.T) {
 	errs := make([]error, n)
 	for i := range n {
 		wg.Add(1)
-		go func(i int) { defer wg.Done(); clients[i], errs[i] = Open(context.Background(), dir) }(i)
+		go func(i int) { defer wg.Done(); clients[i], errs[i] = Open(context.Background(), dir, "") }(i)
 	}
 	wg.Wait()
 	for i, err := range errs {
@@ -83,7 +83,7 @@ func TestBundledConcurrentStartupAndLeaseLifetime(t *testing.T) {
 	for i := 0; i < n-1; i++ {
 		clients[i].Close()
 	}
-	if _, err := running(context.Background(), dir); err != nil {
+	if _, err := running(context.Background(), dir, ""); err != nil {
 		t.Fatal("remaining client lost its daemon:", err)
 	}
 	for _, file := range []string{"api.token", "endpoint.json", "adapters.json"} {
@@ -102,7 +102,7 @@ func TestBundledConcurrentStartupAndLeaseLifetime(t *testing.T) {
 }
 func TestBundledIdleShutdownAndRestart(t *testing.T) {
 	dir := bundledRuntime(t)
-	c, err := Open(context.Background(), dir)
+	c, err := Open(context.Background(), dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestBundledIdleShutdownAndRestart(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "endpoint.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("idle daemon did not shut down")
 	}
-	c, err = Open(context.Background(), dir)
+	c, err = Open(context.Background(), dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestBundledRepairAndCanceledStartup(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Open(ctx, dir); !errors.Is(err, context.Canceled) {
+	if _, err := Open(ctx, dir, ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("lost cancellation: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "api.token")); !errors.Is(err, os.ErrNotExist) {
@@ -168,7 +168,7 @@ func TestStateSymlinkAndAdapterMismatchFailClosed(t *testing.T) {
 		if err := os.Symlink(t.TempDir(), link); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Open(context.Background(), link); err == nil {
+		if _, err := Open(context.Background(), link, ""); err == nil {
 			t.Fatal("accepted symlink state directory")
 		}
 	}
@@ -178,7 +178,7 @@ func TestStateSymlinkAndAdapterMismatchFailClosed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "adapters.json"), []byte(`{"providers":[]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(context.Background(), dir); err == nil {
+	if _, err := Open(context.Background(), dir, ""); err == nil {
 		t.Fatal("silently replaced operator-modified adapter")
 	}
 }

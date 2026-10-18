@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	sdk "github.com/Microck/galleton/client"
 )
@@ -29,9 +30,11 @@ type Client struct {
 }
 
 // Error retains classification but never includes an upstream message or body.
+// RetryAt is the daemon's own scheduling hint (pause end, backoff deadline).
 type Error struct {
-	Status int
-	Code   string
+	Status  int
+	Code    string
+	RetryAt time.Time
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("galleton returned HTTP %d", e.Status) }
@@ -43,6 +46,10 @@ func IsStatus(err error, status int) bool {
 type Metadata = sdk.Metadata
 type Credentials = sdk.Credentials
 type Headers = sdk.Headers
+type Provider = sdk.Provider
+
+// ProviderName is the bundled adapter's provider.
+const ProviderName = "wallapop"
 
 // FromEnv is the advanced external-daemon path. It never installs or starts it.
 func FromEnv() (*Client, error) {
@@ -89,7 +96,11 @@ func safeError(ctx context.Context, err error) error {
 	}
 	var e *sdk.Error
 	if errors.As(err, &e) {
-		return &Error{Status: e.Status, Code: e.Code}
+		out := &Error{Status: e.Status, Code: e.Code}
+		if t, perr := time.Parse(time.RFC3339, e.RetryAt); perr == nil {
+			out.RetryAt = t
+		}
+		return out
 	}
 	return errors.New("galleton could not complete the operation; it may already have completed. Run `wallapop auth service status` before retrying")
 }
@@ -129,4 +140,32 @@ func (c *Client) Shutdown(ctx context.Context) error { return safeError(ctx, c.s
 func (c *Client) Ping(ctx context.Context) error {
 	_, err := c.sdk.List(ctx)
 	return safeError(ctx, err)
+}
+
+// provider describes the wallapop provider as the daemon is configured: never
+// the proxy URL, only whether there is one, and any pause.
+func (c *Client) provider(ctx context.Context) (Provider, error) {
+	list, err := c.sdk.Providers(ctx)
+	if err != nil {
+		return Provider{}, safeError(ctx, err)
+	}
+	for _, p := range list {
+		if p.Name == ProviderName {
+			return p, nil
+		}
+	}
+	return Provider{}, &Error{Status: http.StatusNotFound, Code: "not_found"}
+}
+
+// Pause stops the daemon's renewals for the provider for seconds (1-86400). It
+// only extends an existing pause, and the daemon keeps it across restarts.
+func (c *Client) Pause(ctx context.Context, seconds int) (time.Time, error) {
+	p, err := c.sdk.Pause(ctx, ProviderName, seconds)
+	if err != nil {
+		return time.Time{}, safeError(ctx, err)
+	}
+	if p.PausedUntil == nil {
+		return time.Time{}, nil
+	}
+	return *p.PausedUntil, nil
 }

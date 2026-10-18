@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Microck/wallapop-cli/internal/galleton"
 	"github.com/Microck/wallapop-cli/internal/wallapop"
@@ -71,11 +72,21 @@ func TestManagedIDsAndErrorClassification(t *testing.T) {
 	if !errors.Is(managedError(context.Canceled), context.Canceled) {
 		t.Fatal("lost cancellation")
 	}
-	for _, code := range []string{"renewal_uncertain", "reauth_required", "revision_conflict"} {
+	for _, code := range []string{"renewal_uncertain", "reauth_required", "revision_conflict", "configuration_error"} {
 		err := managedError(&galleton.Error{Status: 409, Code: code})
 		var apiErr *wallapop.Error
 		if !errors.As(err, &apiErr) || apiErr.Kind != wallapop.KindAuth || apiErr.Retryable {
 			t.Fatalf("unsafe replay classification: %v", err)
+		}
+	}
+	// Galleton 0.1.0's temporary refusals keep the session: they are blocks or
+	// waits with the daemon's own deadline, never a reason to log in again.
+	at := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	for code, kind := range map[string]wallapop.Kind{"provider_paused": wallapop.KindBlocked, "upstream_blocked": wallapop.KindBlocked, "retry_later": wallapop.KindNetwork} {
+		err := managedError(&galleton.Error{Status: 503, Code: code, RetryAt: at})
+		var apiErr *wallapop.Error
+		if !errors.As(err, &apiErr) || apiErr.Kind != kind || !strings.Contains(apiErr.Msg, at.Local().Format(time.RFC3339)) {
+			t.Fatalf("%s: %v", code, err)
 		}
 	}
 }

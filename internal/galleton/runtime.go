@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,25 +23,36 @@ import (
 	"github.com/Microck/wallapop-cli/internal/galleton/bundle"
 )
 
-//go:embed adapter.json
-var adapter []byte
-
 const hostCommand = "__galleton-host"
 const idleGrace = 10 * time.Second
 
 var errHostVersionMismatch = errors.New("a different session engine version is still running; run `wallapop auth service disable && wallapop auth service enable`, or stop watch/MCP processes, then retry")
 
+// errHostProxyMismatch fails closed: a running engine renews through the proxy
+// it was started with, so a command asking for another one must not use it.
+var errHostProxyMismatch = errors.New("the session engine is running with a different proxy setting; stop watch/MCP processes and run `wallapop auth service stop` (disable the auth service first if it is enabled), or use the same WALLAPOP_PROXY/config proxy, then retry")
+
 type endpoint struct {
 	URL     string `json:"url"`
 	Version string `json:"version"`
+	// Proxy is a keyed fingerprint of the engine's proxy URL, empty for a
+	// direct connection. The URL itself, which may carry credentials, is
+	// never written to disk.
+	Proxy string `json:"proxy,omitempty"`
+}
+
+func hostMismatch(err error) bool {
+	return errors.Is(err, errHostVersionMismatch) || errors.Is(err, errHostProxyMismatch)
 }
 
 // Open obtains a lease on the shared, automatically managed daemon. Releasing
 // the last lease allows the host to shut down after a short idle grace period.
 // Only read-only readiness probes are retried; imports/renewals are never replayed.
-func Open(ctx context.Context, dir string) (*Client, error) {
+// proxy is the validated egress proxy URL, or empty for a direct connection;
+// an engine running with any other setting is refused, never reused.
+func Open(ctx context.Context, dir, proxy string) (*Client, error) {
 	if Configured() {
-		return FromEnv()
+		return openExternal(ctx, proxy)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -75,7 +85,7 @@ func Open(ctx context.Context, dir string) (*Client, error) {
 		}
 	}()
 	connect := func() (*Client, error) {
-		c, err := running(ctx, dir)
+		c, err := running(ctx, dir, proxy)
 		if err == nil {
 			c.release = release
 			success = true
@@ -90,7 +100,7 @@ func Open(ctx context.Context, dir string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !free && errors.Is(connectErr, errHostVersionMismatch) {
+	if !free && hostMismatch(connectErr) {
 		return nil, connectErr
 	}
 	if free {
@@ -99,14 +109,7 @@ func Open(ctx context.Context, dir string) (*Client, error) {
 		if _, err := engineBinary(ctx, dir); err != nil {
 			return nil, err
 		}
-		path := filepath.Join(dir, "adapters.json")
-		if old, err := readRegular(path, 1<<20); err == nil {
-			if string(old) != string(adapter) {
-				return nil, errors.New("managed session adapter changed; restore the bundled adapter or use an explicit external daemon")
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		} else if err := atomicFile(path, adapter, 0600); err != nil {
+		if err := installAdapter(dir, proxy != ""); err != nil {
 			return nil, err
 		}
 		exe, err := os.Executable()
@@ -118,7 +121,7 @@ func Open(ctx context.Context, dir string) (*Client, error) {
 			return nil, err
 		}
 		cmd := exec.Command(exe, hostCommand, dir)
-		cmd.Env = cleanEnv()
+		cmd.Env = hostEnv(proxy)
 		detach(cmd)
 		// Never inherit terminal pipes: the short-lived CLI must be free to exit.
 		if err := cmd.Start(); err != nil {
@@ -133,9 +136,9 @@ func Open(ctx context.Context, dir string) (*Client, error) {
 	for {
 		if c, err := connect(); err == nil {
 			return c, nil
-		} else if !free && errors.Is(err, errHostVersionMismatch) {
+		} else if !free && hostMismatch(err) {
 			// A host that was still starting may have only just published its
-			// endpoint. Confirm it is alive before reporting the version conflict.
+			// endpoint. Confirm it is alive before reporting the conflict.
 			// Ignore stale endpoints when we launched the replacement ourselves.
 			host, unlocked, lockErr := filelock.Try(filepath.Join(dir, "host.lock"))
 			if lockErr != nil {
@@ -156,7 +159,10 @@ func Open(ctx context.Context, dir string) (*Client, error) {
 	}
 }
 
-func running(ctx context.Context, dir string) (*Client, error) {
+// running connects to the published engine. On a proxy mismatch it returns
+// the live client with errHostProxyMismatch, so status can still inspect it;
+// callers that act on credentials must treat that as a failure.
+func running(ctx context.Context, dir, proxy string) (*Client, error) {
 	raw, err := readRegular(filepath.Join(dir, "endpoint.json"), 4096)
 	if err != nil {
 		return nil, err
@@ -197,6 +203,9 @@ func running(ctx context.Context, dir string) (*Client, error) {
 	}
 	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&health) != nil || !health.OK || health.Version != "0.1.0" {
 		return nil, errors.New("session host failed authenticated readiness check")
+	}
+	if ep.Proxy != proxyFingerprint(token, proxy) {
+		return c, errHostProxyMismatch
 	}
 	return c, nil
 }
@@ -239,8 +248,15 @@ func RunHost(dir string) error {
 	if err := init.Run(); err != nil {
 		return errors.New("could not initialize private session storage")
 	}
+	// The launcher wrote adapters.json for this proxy setting under the
+	// startup lock. Refuse to serve one that does not match the environment,
+	// so the engine never renews outside the proxy it advertises.
+	proxy := os.Getenv(ProxyEnv)
+	if raw, err := readRegular(filepath.Join(dir, "adapters.json"), 1<<20); err != nil || string(raw) != string(adapterFor(proxy != "")) {
+		return errors.New("session adapter does not match the host's proxy setting")
+	}
 	cmd := exec.Command(binary, "serve", "--dir", dir, "--config", filepath.Join(dir, "adapters.json"), "--listen", "127.0.0.1:0")
-	cmd.Env = cleanEnv()
+	cmd.Env = hostEnv(proxy)
 	noWindow(cmd)
 	pipe, err := cmd.StderrPipe()
 	if err != nil {
@@ -304,12 +320,12 @@ func RunHost(dir string) error {
 			_ = cmd.Process.Kill()
 			return err
 		}
-		raw, _ := json.Marshal(endpoint{URL: base, Version: bundle.Version})
+		raw, _ := json.Marshal(endpoint{URL: base, Version: bundle.Version, Proxy: proxyFingerprint(token, proxy)})
 		if err := atomicFile(filepath.Join(dir, "endpoint.json"), raw, 0600); err != nil {
 			return err
 		}
 		// Also validates the token, URL and health response before accepting leases.
-		_, err = running(ctx, dir)
+		_, err = running(ctx, dir, proxy)
 		if err != nil {
 			return err
 		}
@@ -386,19 +402,45 @@ func activeLeases(dir string) (bool, error) {
 	return active, nil
 }
 
-// RuntimeStatus is metadata only: checking it does not start a daemon.
-func RuntimeStatus(ctx context.Context, dir string) map[string]any {
+// RuntimeStatus is metadata only: checking it does not start a daemon. A
+// running engine also reports, from the engine itself, whether the wallapop
+// provider is proxied and until when it is paused.
+func RuntimeStatus(ctx context.Context, dir, proxy string) map[string]any {
+	probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	if Configured() {
-		c, err := FromEnv()
-		if err == nil {
-			probe, cancel := context.WithTimeout(ctx, time.Second)
-			err = c.Ping(probe)
-			cancel()
+		st := map[string]any{"running": false, "external": true}
+		if c, err := FromEnv(); err == nil {
+			providerStatus(probe, c, st)
 		}
-		return map[string]any{"running": err == nil, "external": true}
+		return st
 	}
-	_, err := running(ctx, dir)
-	return map[string]any{"running": err == nil, "state_dir": dir, "engine_version": bundle.Version, "external": false}
+	st := map[string]any{"running": false, "state_dir": dir, "engine_version": bundle.Version, "external": false}
+	c, err := running(probe, dir, proxy)
+	if errors.Is(err, errHostProxyMismatch) {
+		st["proxy_mismatch"] = true
+	}
+	if c != nil {
+		providerStatus(probe, c, st)
+	}
+	return st
+}
+
+// providerStatus fills running, proxied and paused_until. A daemon that
+// answers but does not list the provider still counts as running.
+func providerStatus(ctx context.Context, c *Client, st map[string]any) {
+	p, err := c.provider(ctx)
+	if err != nil {
+		if IsStatus(err, http.StatusNotFound) {
+			st["running"] = true
+		}
+		return
+	}
+	st["running"] = true
+	st["proxied"] = p.Proxied
+	if p.PausedUntil != nil && p.PausedUntil.After(time.Now()) {
+		st["paused_until"] = p.PausedUntil.UTC()
+	}
 }
 
 func Stop(ctx context.Context, dir string) error {
@@ -416,8 +458,10 @@ func Stop(ctx context.Context, dir string) error {
 	if active {
 		return fmt.Errorf("session engine is in use; stop the auth service, watch, or MCP process first")
 	}
-	c, err := running(ctx, dir)
-	if err != nil {
+	// Stopping is how a proxy mismatch is resolved, so stop whichever proxy
+	// the engine runs with.
+	c, err := running(ctx, dir, "")
+	if c == nil || (err != nil && !errors.Is(err, errHostProxyMismatch)) {
 		return nil
 	}
 	if err := c.Shutdown(ctx); err != nil {

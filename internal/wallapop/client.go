@@ -49,6 +49,13 @@ type Client struct {
 	// Notice receives one-off human hints (currently only the browser UA fallback).
 	Notice func(string)
 	Tokens TokenSource
+	// Proxy names the proxy every request goes through, without credentials;
+	// empty for a direct connection. Set by UseProxy.
+	Proxy string
+	// OnBlock, when non-nil, runs after Wallapop's bot protection refused a
+	// request (a non-JSON 403 such as CloudFront's page, or a 429), once the
+	// browser user agent retry did not help.
+	OnBlock func(ctx context.Context)
 
 	uaMu          sync.Mutex
 	useBrowserUA  bool
@@ -112,6 +119,9 @@ type request struct {
 	// long poll needs a timeout no other call wants, and `chat open` publishes
 	// on the shared client while a poll is in flight, so it cannot be swapped.
 	httpClient *http.Client
+	// pubnub marks chat requests to PubNub, whose refusals say nothing about
+	// Wallapop's bot protection.
+	pubnub bool
 }
 
 // do performs one API call, decodes JSON into out (may be nil) and classifies
@@ -213,6 +223,9 @@ func (c *Client) do(ctx context.Context, r request, out any) (*http.Response, er
 		}
 	}
 	if !ok {
+		if !r.pubnub {
+			c.reportBlock(ctx, resp.StatusCode, raw)
+		}
 		return resp, c.statusError(endpoint, resp.StatusCode, raw)
 	}
 	if out != nil && len(bytes.TrimSpace(raw)) > 0 {
@@ -248,6 +261,20 @@ func isCloudFrontBlock(body []byte) bool {
 	return bytes.Contains(body, []byte("The request could not be satisfied")) || bytes.Contains(body, []byte("cloudfront"))
 }
 
+// isBotBlock tells bot-protection refusals from Wallapop's own answers: a 429,
+// or a 403 with a body that is not JSON (CloudFront's or a WAF's HTML page).
+// A bare 403 is Wallapop refusing a write on someone else's item.
+func isBotBlock(status int, body []byte) bool {
+	body = bytes.TrimSpace(body)
+	return status == http.StatusTooManyRequests || status == http.StatusForbidden && len(body) > 0 && !json.Valid(body)
+}
+
+func (c *Client) reportBlock(ctx context.Context, status int, body []byte) {
+	if c.OnBlock != nil && isBotBlock(status, body) {
+		c.OnBlock(ctx)
+	}
+}
+
 func (c *Client) debugf(format string, args ...any) {
 	if c.Debug != nil {
 		fmt.Fprintf(c.Debug, format+"\n", args...)
@@ -270,7 +297,11 @@ func (c *Client) netError(endpoint string, err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
-	return &Error{Kind: KindNetwork, Endpoint: endpoint, Retryable: true, Msg: "could not reach wallapop: " + c.redact(err.Error())}
+	via := ""
+	if c.Proxy != "" {
+		via = " through the proxy " + c.Proxy + " (the cli never falls back to a direct connection)"
+	}
+	return &Error{Kind: KindNetwork, Endpoint: endpoint, Retryable: true, Msg: "could not reach wallapop" + via + ": " + c.redact(err.Error())}
 }
 
 func (c *Client) statusError(endpoint string, status int, raw []byte) error {

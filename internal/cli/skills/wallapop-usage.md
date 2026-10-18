@@ -11,7 +11,7 @@
 | 2 | usage: bad flags, unknown filter key, missing location, cancelled prompt |
 | 3 | auth: no session or session rejected (`wallapop auth login`) |
 | 4 | not found |
-| 5 | blocked or rate limited by Wallapop; wait and retry |
+| 5 | blocked or rate limited by Wallapop, or session renewal paused after a block; wait (stderr names until when), do not retry in a loop |
 | 6 | network or timeout |
 | 7 | Wallapop changed its API; stderr has a prefilled issue link |
 | 130 | interrupted |
@@ -19,13 +19,13 @@
 ## Login
 
 ```
-wallapop auth login --cookies cookies.txt        # Netscape export from a logged-in browser
+wallapop auth login --cookies cookies.txt        # cookies.txt, Cookie-Editor/EditThisCookie JSON, DevTools list or Cookie: header
 wallapop auth status --check
 ```
 
 The bundled Galleton engine encrypts the imported session and rotated access credentials; the CLI stores only its reference. Profiles: `--profile NAME` or `WALLAPOP_PROFILE`.
 
-The engine starts automatically when needed, migrates legacy cookies safely, and is shared by concurrent CLI/watch/MCP commands. It shuts down after the last client exits. To renew between commands, explicitly run `wallapop auth service enable`; `disable` removes startup, `status` inspects it, and `run` stays in the foreground. No extra Galleton install or environment variables are needed. Revocation or provider changes can still require a fresh browser export. `auth refresh` requests renewal; `auth status --check` verifies a token, not a guarantee of future session lifetime.
+The engine starts automatically when needed, migrates legacy cookies safely, and is shared by concurrent CLI/watch/MCP commands. It shuts down after the last client exits. To renew between commands, explicitly run `wallapop auth service enable`; `disable` removes startup, `status` inspects it (including `paused_until` and `proxied`), and `run` stays in the foreground. No extra Galleton install or environment variables are needed. Revocation or provider changes can still require a fresh browser export. `auth refresh` requests renewal; `auth status --check` verifies a token, not a guarantee of future session lifetime. After a CloudFront block (exit 5) the CLI pauses renewals for 15 minutes.
 
 ## Saved searches
 
@@ -97,4 +97,4 @@ Not tools, on purpose: `item reserve`, `item sold`, `item delete`, `item create`
 
 ## Config
 
-`$XDG_CONFIG_HOME/wallapop-cli/config.toml`; `wallapop config set watch.interval 10m`; `wallapop config path`. Session references live in `credentials.toml` (0600), the private engine vault in the adjacent `galleton/` directory, state in `$XDG_DATA_HOME/wallapop-cli/state.db`.
+`$XDG_CONFIG_HOME/wallapop-cli/config.toml`; `wallapop config set watch.interval 10m`; `wallapop config set proxy socks5h://127.0.0.1:1080` (or env `WALLAPOP_PROXY`, which wins and may carry credentials; all Wallapop traffic and renewals, never falls back to direct, exit 6 if unreachable); `wallapop config path`. Session references live in `credentials.toml` (0600), the private engine vault in the adjacent `galleton/` directory, state in `$XDG_DATA_HOME/wallapop-cli/state.db`.

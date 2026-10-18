@@ -26,7 +26,7 @@ func (a *App) authServiceCmd() *cobra.Command {
 		if dir != "" {
 			state = dir
 		}
-		c, err := galleton.Open(cmd.Context(), state)
+		c, err := galleton.Open(cmd.Context(), state, a.proxy)
 		if err != nil {
 			return err
 		}
@@ -53,7 +53,7 @@ func (a *App) authServiceCmd() *cobra.Command {
 		&cobra.Command{Use: "enable", Short: "Enable unattended renewal at OS login", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return a.authServiceChange(cmd.Context(), true) }},
 		&cobra.Command{Use: "disable", Short: "Remove unattended renewal at OS login", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return a.authServiceChange(cmd.Context(), false) }},
 		&cobra.Command{Use: "status", Short: "Inspect the session engine without starting it", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-			state := galleton.RuntimeStatus(cmd.Context(), a.sessionDir())
+			state := galleton.RuntimeStatus(cmd.Context(), a.sessionDir(), a.proxy)
 			unit, _, err := a.authServiceUnit()
 			if err == nil {
 				state["startup_installed"] = unit.installed()
@@ -95,17 +95,31 @@ func (a *App) authServiceUnit() (*serviceUnit, string, error) {
 	}
 }
 
-// Service definitions use absolute paths and never copy credential environment variables.
-func authServiceDefinition(platform, name, exe, dir string) string {
+// Service definitions use absolute paths and never copy credential environment
+// variables. env holds only WALLAPOP_PROXY, checked to carry no credentials,
+// so renewal keeps using the proxy the CLI uses.
+func authServiceDefinition(platform, name, exe, dir string, env [][2]string) string {
 	if platform == "systemd" {
-		return "[Unit]\nDescription=Wallapop session renewal\n\n[Service]\nType=simple\nExecStart=" + systemdQuote(exe) + " auth service run --dir " + systemdQuote(dir) + " --no-input\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n"
+		var envLines strings.Builder
+		for _, kv := range env {
+			envLines.WriteString("Environment=" + systemdQuote(kv[0]+"="+kv[1]) + "\n")
+		}
+		return "[Unit]\nDescription=Wallapop session renewal\n\n[Service]\nType=simple\n" + envLines.String() + "ExecStart=" + systemdQuote(exe) + " auth service run --dir " + systemdQuote(dir) + " --no-input\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n"
+	}
+	var envDict strings.Builder
+	if len(env) > 0 {
+		envDict.WriteString("<key>EnvironmentVariables</key><dict>")
+		for _, kv := range env {
+			envDict.WriteString("<key>" + xmlEscape(kv[0]) + "</key><string>" + xmlEscape(kv[1]) + "</string>")
+		}
+		envDict.WriteString("</dict>\n")
 	}
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>` + xmlEscape(name) + `</string>
 <key>ProgramArguments</key><array><string>` + xmlEscape(exe) + `</string><string>auth</string><string>service</string><string>run</string><string>--dir</string><string>` + xmlEscape(dir) + `</string><string>--no-input</string></array>
-<key>RunAtLoad</key><true/>
+` + envDict.String() + `<key>RunAtLoad</key><true/>
 <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 </dict></plist>
 `
@@ -141,6 +155,13 @@ func (a *App) authServiceChange(ctx context.Context, enable bool) error {
 		return nil
 	}
 	if enable {
+		if err := serviceProxyCheck(u.platform == "schtasks"); err != nil {
+			return err
+		}
+		var env [][2]string
+		if v := os.Getenv(galleton.ProxyEnv); v != "" {
+			env = append(env, [2]string{galleton.ProxyEnv, v})
+		}
 		// Prove startup works before registering it with the user's OS session.
 		if _, err := a.galletonClient(ctx); err != nil {
 			return err
@@ -149,7 +170,7 @@ func (a *App) authServiceChange(ctx context.Context, enable bool) error {
 			return err
 		}
 		if u.platform != "schtasks" {
-			if err := os.WriteFile(u.files[0], []byte(authServiceDefinition(u.platform, u.name, exe, dir)), 0600); err != nil {
+			if err := os.WriteFile(u.files[0], []byte(authServiceDefinition(u.platform, u.name, exe, dir, env)), 0600); err != nil {
 				return err
 			}
 		}

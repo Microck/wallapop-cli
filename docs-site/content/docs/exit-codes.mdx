@@ -13,8 +13,8 @@ script can read stdout and check `$?` independently.
 | `2` | Usage: bad flags, unknown filter key, missing location | No, fix the command |
 | `3` | Auth: no session, session rejected, MFA pending | No, log in again |
 | `4` | Not found: item, user, conversation or watch | No |
-| `5` | Blocked or rate limited (CloudFront 403, HTTP 429) | Yes, after a wait |
-| `6` | Network or timeout | Yes |
+| `5` | Blocked or rate limited (CloudFront 403, HTTP 429), or session renewal paused after a block | Yes, after a wait. Renewals stay paused for 15 minutes, see [Blocks](/docs/auth#blocks) |
+| `6` | Network or timeout, including an unreachable proxy | Yes |
 | `7` | API changed: a known endpoint returned an unexpected shape | No, [report it](/docs/api-changes) |
 | `130` | Interrupted | - |
 

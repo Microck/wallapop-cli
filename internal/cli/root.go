@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -54,6 +56,12 @@ type App struct {
 
 	store   *store.Store
 	managed *managedSession
+
+	// proxy is the validated proxy URL, credentials included, that all
+	// Wallapop traffic and the session engine use; empty for direct.
+	proxy       string
+	pauseMu     sync.Mutex
+	pausedUntil time.Time
 }
 
 // Execute runs the CLI and returns the process exit code.
@@ -198,8 +206,43 @@ func (a *App) setup(cmd *cobra.Command) error {
 		a.Client.Debug = a.Stderr
 	}
 	a.Client.Notice = func(s string) { fmt.Fprintln(a.Stderr, "wallapop: "+s) }
+	a.Client.OnBlock = a.pauseRenewals
+	// A bad proxy fails every command but `config`, which can fix it. Nothing
+	// is sent, least of all directly.
+	if err := a.applyProxy(); err != nil && !underCommand(cmd, "config") {
+		return err
+	}
 	a.attachSession()
 	return nil
+}
+
+// applyProxy routes all Wallapop traffic through WALLAPOP_PROXY, else the
+// config's proxy, with no fallback to a direct connection. The session engine
+// gets the same proxy for renewals.
+func (a *App) applyProxy() error {
+	raw, src := os.Getenv(galleton.ProxyEnv), galleton.ProxyEnv
+	if raw == "" {
+		raw, src = a.Cfg.Proxy, "config proxy"
+	}
+	if raw == "" {
+		return nil
+	}
+	u, err := wallapop.ParseProxy(raw)
+	if err != nil {
+		return output.Usagef("%s: %v. Nothing is sent to wallapop until it is fixed", src, err)
+	}
+	a.Client.UseProxy(u)
+	a.proxy = u.String()
+	return nil
+}
+
+func underCommand(cmd *cobra.Command, name string) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		if c.Name() == name && c.Parent() != nil && !c.Parent().HasParent() {
+			return true
+		}
+	}
+	return false
 }
 
 // attachSession wires the active profile's session (or WALLAPOP_SESSION_TOKEN)

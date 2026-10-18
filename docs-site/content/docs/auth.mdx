@@ -18,8 +18,8 @@ automatically starts its bundled Galleton engine for renewal and encrypted stora
 <Step>
 ### Install a cookie exporter
 
-Any extension that exports Netscape-format cookies works. Cookie-Editor and "Get cookies.txt"
-are the common ones.
+Any cookie export extension works. Cookie-Editor, EditThisCookie and "Get cookies.txt" are the
+common ones.
 
 ![Cookie-Editor homepage, showing the supported browsers and the import/export feature](/auth/cookie-editor-home.png)
 </Step>
@@ -38,10 +38,17 @@ CLI also picks up `device_id` if it is there.
 
 ![Cookie-Editor feature list with the import and export option](/auth/cookie-editor-export.png)
 
-<Callout type="warn" title="Cookie-Editor exports JSON by default">
-  The CLI reads Netscape format, pasted `name=value` pairs, or a bare cookie value. If your
-  exporter offers a format choice, pick Netscape or "cookies.txt".
-</Callout>
+The CLI reads the export with Galleton's cookie parser and detects the format:
+
+- Netscape `cookies.txt`
+- Cookie-Editor or EditThisCookie JSON, as an array or a `{"url", "cookies"}` wrapper
+- a DevTools or Playwright cookie list
+- a `Cookie:` header or `name=value; name=value` pairs
+- the bare value of `__Secure-next-auth.session-token`
+
+`--cookies-format netscape|json|header` overrides the detection. A whole-browser export is
+fine: only `wallapop.com` cookies are read, so another site's session cookie is never picked
+up.
 </Step>
 
 <Step>
@@ -99,6 +106,35 @@ Nothing installs a startup service silently. `auth service run` is the foregroun
 alternative for your own supervisor. `auth service stop` refuses to stop an engine still
 in use by another client. Renewal cannot override Wallapop expiry, revocation, or a
 requirement to log in again; it cannot run while the computer is off.
+
+## Proxy
+
+Send all Wallapop traffic, session renewals included, through one proxy:
+
+```bash
+wallapop config set proxy socks5h://127.0.0.1:1080
+WALLAPOP_PROXY=http://user:pass@proxy.lan:3128 wallapop search "bici"
+```
+
+`http`, `https`, `socks5` and `socks5h` work; `WALLAPOP_PROXY` wins over the config. Nothing
+falls back to a direct connection: an unreachable proxy fails with exit `6`, an invalid one
+with exit `2`. config.toml is world-readable, so a proxy with credentials goes in
+`WALLAPOP_PROXY` only. `wallapop doctor` shows the proxy in use, without credentials.
+
+The session engine renews through the same proxy. One already running with another proxy
+setting is refused, never shared: stop watch and MCP processes, run
+`wallapop auth service stop`, and run the command again. `auth service enable` and
+`watch service install` carry `WALLAPOP_PROXY` into their units and refuse one with
+credentials; on Windows, set the proxy in config instead.
+
+## Blocks
+
+When Wallapop's CloudFront refuses a request with its 403 page, or answers 429, the command
+exits `5` and the CLI pauses session renewals for 15 minutes, so they do not keep knocking
+from the same address. The pause survives restarts and shows up as `paused_until` in
+`wallapop auth service status`. Commands keep using a valid access token meanwhile; once it
+needs renewing they exit `5` until the pause ends. A CloudFront page during renewal itself
+keeps the session: the engine backs off and retries instead of asking for a new login.
 
 Managed status reports `source: "galleton"` and the session ID. Cookie expiry is omitted
 because the daemon does not expose it. The [lifecycle and recovery guide](https://github.com/Microck/wallapop-cli/blob/main/docs/galleton.md)

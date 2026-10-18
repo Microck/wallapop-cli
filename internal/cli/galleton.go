@@ -148,10 +148,26 @@ func managedError(err error) error {
 		return e
 	}
 	e.Status = apiErr.Status
+	until := ""
+	if !apiErr.RetryAt.IsZero() {
+		until = " until " + apiErr.RetryAt.Local().Format(time.RFC3339)
+	}
 	switch {
 	case apiErr.Code == "reauth_required" || apiErr.Code == "renewal_uncertain" || apiErr.Status == http.StatusNotFound:
 		e.Kind = wallapop.KindAuth
 		e.Msg = "Galleton needs this profile to be reconnected. Run `wallapop auth login` with a fresh cookie export"
+	case apiErr.Code == "configuration_error":
+		e.Kind = wallapop.KindAuth
+		e.Msg = "Galleton's wallapop adapter no longer matches this session. Run `wallapop auth login` with a fresh cookie export"
+	case apiErr.Code == "provider_paused":
+		e.Kind = wallapop.KindBlocked
+		e.Msg = "session renewal is paused" + until + " after wallapop blocked a request. Wait for it to end before retrying"
+	case apiErr.Code == "upstream_blocked":
+		e.Kind = wallapop.KindBlocked
+		e.Msg = "wallapop's bot protection refused the session renewal; the session was kept and Galleton retries" + until
+	case apiErr.Code == "retry_later":
+		e.Retryable = true
+		e.Msg = "Galleton could not renew the session right now and retries" + until + "; nothing was lost"
 	case apiErr.Status == http.StatusUnauthorized || apiErr.Status == http.StatusForbidden:
 		e.Kind = wallapop.KindAuth
 		e.Msg = "Galleton rejected local access; check api.token and the provider's allowed origins"
@@ -284,10 +300,36 @@ func (a *App) galletonClient(ctx context.Context) (*galleton.Client, error) {
 	if a.sessionClient != nil {
 		return a.sessionClient, nil
 	}
-	c, err := galleton.Open(ctx, a.sessionDir())
+	c, err := galleton.Open(ctx, a.sessionDir(), a.proxy)
 	if err != nil {
 		return nil, err
 	}
 	a.sessionClient = c
 	return c, nil
+}
+
+// blockPause is how long session renewals stop after Wallapop's bot
+// protection refused one of the CLI's own requests.
+const blockPause = 15 * time.Minute
+
+// pauseRenewals asks Galleton to stop renewing for blockPause after a block,
+// so renewals do not keep knocking from the same address. Galleton saves the
+// pause, so it outlives this process and an engine restart. Only an engine
+// this process already uses is paused; a command that never needed the
+// session does not start one just for this.
+func (a *App) pauseRenewals(ctx context.Context) {
+	a.pauseMu.Lock()
+	defer a.pauseMu.Unlock()
+	if a.sessionClient == nil || time.Now().Before(a.pausedUntil) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	until, err := a.sessionClient.Pause(ctx, int(blockPause/time.Second))
+	if err != nil {
+		fmt.Fprintln(a.Stderr, "wallapop: could not pause session renewals after the block: "+managedError(err).Error())
+		return
+	}
+	a.pausedUntil = until
+	fmt.Fprintf(a.Stderr, "wallapop: session renewals are paused until %s so they do not add to the block\n", until.Local().Format(time.RFC3339))
 }

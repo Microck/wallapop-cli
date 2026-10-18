@@ -321,6 +321,7 @@ func (c *Client) nextData(ctx context.Context, path string, out any) error {
 		return &Error{Kind: KindNotFound, Status: resp.StatusCode, Endpoint: endpoint, Msg: "wallapop has no page at " + path}
 	}
 	if resp.StatusCode != http.StatusOK {
+		c.reportBlock(ctx, resp.StatusCode, raw)
 		return c.statusError(endpoint, resp.StatusCode, raw)
 	}
 	m := nextDataRe.FindSubmatch(raw)

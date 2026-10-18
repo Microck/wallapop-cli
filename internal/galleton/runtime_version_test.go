@@ -71,7 +71,7 @@ func TestOpenRejectsRunningEngineVersionMismatch(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			c, err := Open(ctx, dir)
+			c, err := Open(ctx, dir, "")
 			if c != nil {
 				c.Close()
 				t.Fatal("connected to a different engine version")
@@ -120,12 +120,12 @@ func TestBundledStaleVersionEndpointRestarts(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	c, err := Open(ctx, dir)
+	c, err := Open(ctx, dir, "")
 	if err != nil {
 		t.Fatal("stale endpoint without a live host prevented restart:", err)
 	}
 	defer c.Close()
-	if _, err := running(ctx, dir); err != nil {
+	if _, err := running(ctx, dir, ""); err != nil {
 		t.Fatal(err)
 	}
 }

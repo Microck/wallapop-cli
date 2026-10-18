@@ -67,6 +67,44 @@ For containers or another supervisor, use `wallapop auth service run` in the
 foreground. `auth service stop` stops an idle engine; it refuses while clients
 remain active. Disable an installed service before stopping its engine.
 
+## Proxy
+
+`WALLAPOP_PROXY` (or `proxy` in config.toml, which the variable overrides) sends
+all Wallapop traffic through one `http`, `https`, `socks5` or `socks5h` proxy:
+the CLI's own API, upload and chat requests, and the engine's renewals. With
+`socks5h` the proxy resolves Wallapop's host names too. Nothing falls back to a
+direct connection: an unreachable proxy fails the command with exit 6, and an
+invalid one fails every command but `config` with exit 2. config.toml is
+world-readable, so `config set proxy` refuses a URL with credentials; put one in
+`WALLAPOP_PROXY` instead.
+
+The engine gets the proxy through its environment, never on disk. Its adapter
+names the variable (`proxy_env`), so Galleton refuses to start without it. The
+engine records a fingerprint of the proxy keyed with its API token, and a command
+asking for a different proxy (or none) refuses to use a running engine instead
+of sharing it. To switch, stop watch/MCP processes, run `wallapop auth service
+stop` (disable the auth service first if it is enabled), and run the command
+again. `auth service enable` and `watch service install` pin `WALLAPOP_PROXY`
+into the unit and refuse one with credentials; on Windows, where a task cannot
+carry it, set the proxy with `wallapop config set proxy` instead. With an
+external daemon, the CLI only checks that its wallapop provider reports a proxy.
+
+## Blocks and pauses
+
+CloudFront refuses requests it dislikes with a 403 HTML page. During renewal,
+the adapter's `block_signatures` (that page, and any 403 that is not JSON) make
+this a temporary refusal: Galleton keeps the session, backs off and retries,
+and the command exits 5 instead of asking for a new login. `min_interval_ms`
+spaces renewals at least one second apart across all profiles.
+
+When one of the CLI's own requests is blocked (a 403 page that the browser user
+agent retry did not get past, or a 429), the CLI asks the engine it is using to
+pause renewals for 15 minutes. Galleton saves the pause, so it outlives the
+command and an engine restart. While it lasts, commands still use a held access
+token; once that needs renewing they exit 5 and name the time the pause ends.
+`auth service status` shows it as `paused_until`. Commands that never needed the
+session do not start the engine just to pause it.
+
 ## Migration and storage
 
 An existing cookie profile is migrated on its first authenticated use, including:
@@ -117,6 +155,17 @@ CI. It uses the in-process token path and is never silently imported into the
 persistent vault. Remove it to use a saved managed profile. Explicit `auth login`
 always imports the supplied cookie into managed storage.
 
+## Upgrading from v0.3.x
+
+Releases up to v0.3.2 pinned a Galleton development build. This one pins
+Galleton v0.1.0 and adds `block_signatures`, `min_interval_ms` and, with a
+proxy, `proxy_env` to the bundled adapter. Galleton leaves those fields out of
+the configuration hash it checks imported sessions against, so existing
+sessions keep working without a new login. The first command after the upgrade
+replaces the adapter the old release installed; an adapter edited by hand still
+stops the engine from starting. A running engine of the old version is refused
+until it exits, as before.
+
 ## Provider limits and verification
 
 The bundled adapter only trusts `https://es.wallapop.com` and
@@ -127,10 +176,13 @@ expiry, follow provider redirects, bypass revocation, or retry ambiguous renewal
 failures. Provider behavior may change and still require reauthentication.
 
 Only the short-lived API bearer token reaches the existing Wallapop HTTP client.
-Uploads and chat retain their direct transports; the CLI does not inherit the
-daemon's managed-request body limits or forward arbitrary returned headers.
+Uploads and chat retain their direct transports (through the proxy, when one is
+set); the CLI does not inherit the daemon's managed-request body limits or
+forward arbitrary returned headers.
 
 Tests cover the official SDK contract, fake-provider login/migration, process
 leases, real bundled daemon startup/shutdown, TLS-provider cookie rotation and
-restart persistence, secret handling, and release compilation. These tests do
-not verify a live Wallapop account. No live account credentials are used in CI.
+restart persistence, the bundled adapter against a CloudFront 403 page, a
+persisted pause and a credentialed CONNECT proxy, proxy mismatch refusal,
+secret handling, and release compilation. These tests do not verify a live
+Wallapop account. No live account credentials are used in CI.
