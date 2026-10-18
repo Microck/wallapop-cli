@@ -50,9 +50,11 @@ func adapterFor(proxied bool) []byte {
 }
 
 // ownAdapter reports whether raw is an adapter this CLI wrote: the current one
-// with or without a proxy, or the one older releases installed. Anything else
-// was edited by hand and is never silently replaced.
+// with or without a proxy, or the one older releases installed. Line endings
+// are ignored: a source build from a CRLF checkout embedded, and installed,
+// a CRLF copy. Anything else was edited by hand and is never silently replaced.
 func ownAdapter(raw []byte) bool {
+	raw = bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]) == legacyAdapterSHA256 || bytes.Equal(raw, adapterFor(false)) || bytes.Equal(raw, adapterFor(true))
 }

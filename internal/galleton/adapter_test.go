@@ -81,10 +81,12 @@ func TestInstallAdapterReplacesOnlyItsOwnAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A source build from a CRLF checkout embedded and installed a CRLF copy.
+	crlf := []byte(strings.ReplaceAll(string(legacy), "\n", "\r\n"))
 	for _, step := range []struct {
 		old     []byte
 		proxied bool
-	}{{legacy, false}, {legacy, true}, {adapterFor(true), false}, {adapterFor(false), true}} {
+	}{{legacy, false}, {legacy, true}, {crlf, false}, {adapterFor(true), false}, {adapterFor(false), true}} {
 		if err := os.WriteFile(path, step.old, 0o600); err != nil {
 			t.Fatal(err)
 		}
