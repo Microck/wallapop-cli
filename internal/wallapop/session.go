@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -158,7 +159,16 @@ func ParseCookieExport(r io.Reader, format string, hosts ...string) (sessionCook
 	if err != nil {
 		return "", "", err
 	}
+	// The host filter keeps cookies without a domain (a Cookie header, a JSON
+	// entry without one), since nothing says where they belong. When the
+	// export scopes any cookie to a Wallapop host, the unscoped ones may come
+	// from any site and are ignored; they count only in an export that has no
+	// domains at all, such as a Cookie header.
+	scopedExport := slices.ContainsFunc(cookies, func(c cookiefile.Cookie) bool { return c.Domain != "" })
 	for _, c := range cookies {
+		if scopedExport && c.Domain == "" {
+			continue
+		}
 		switch c.Name {
 		case SessionCookieName:
 			sessionCookie = c.Value

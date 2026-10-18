@@ -199,6 +199,10 @@ func TestLoginReadsBrowserCookieExports(t *testing.T) {
 		"devtools":              `[{"name":"` + session + `","value":"` + fakewallapop.ValidCookie + `","domain":"es.wallapop.com","path":"/","expires":-1,"httpOnly":true,"secure":true,"sameSite":"Lax"}]`,
 		"header":                "Cookie: device_id=" + device + "; " + session + "=" + fakewallapop.ValidCookie,
 		"bare value":            fakewallapop.ValidCookie + "\n",
+		// A JSON entry without a domain could be any site's; the one scoped
+		// to Wallapop wins even when listed first.
+		"mixed json": `[{"name":"` + session + `","value":"` + fakewallapop.ValidCookie + `","domain":"es.wallapop.com","path":"/"},` +
+			`{"name":"` + session + `","value":"someone-elses-session","path":"/"},{"name":"device_id","value":"not-wallapops","path":"/"}]`,
 		// A whole-browser export: another NextAuth site's session cookie,
 		// listed last, must not be picked up.
 		"whole browser": "# Netscape HTTP Cookie File\n" +
