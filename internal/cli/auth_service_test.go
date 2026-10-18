@@ -39,6 +39,29 @@ func TestAuthServiceDefinitionsPinTheProxy(t *testing.T) {
 	}
 }
 
+// A proxy set in a config.toml found through WALLAPOP_CONFIG or a custom
+// XDG_CONFIG_HOME only reaches the service if the service finds that file.
+func TestAuthServiceDefinitionsFindTheSameConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/home/u/cfg")
+	t.Setenv("WALLAPOP_CONFIG", "/home/u/other/config.toml")
+	t.Setenv("WALLAPOP_PROXY", "")
+	t.Setenv("WALLAPOP_SESSION_TOKEN", "secret-cookie")
+	systemd := authServiceDefinition("systemd", "test", "/bin/wallapop", "/state", serviceEnv())
+	for _, want := range []string{`Environment="XDG_CONFIG_HOME=/home/u/cfg"`, `Environment="WALLAPOP_CONFIG=/home/u/other/config.toml"`} {
+		if !strings.Contains(systemd, want) {
+			t.Fatalf("missing %s:\n%s", want, systemd)
+		}
+	}
+	if strings.Contains(systemd, "secret-cookie") {
+		t.Fatal("session secret in the unit")
+	}
+	plist := authServiceDefinition("launchd", "test", "/bin/wallapop", "/state", serviceEnv())
+	wellFormed(t, plist)
+	if !strings.Contains(plist, "<key>WALLAPOP_CONFIG</key><string>/home/u/other/config.toml</string>") {
+		t.Fatal(plist)
+	}
+}
+
 func wellFormed(t *testing.T, plist string) {
 	t.Helper()
 	d := xml.NewDecoder(bytes.NewBufferString(plist))

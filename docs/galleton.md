@@ -84,10 +84,13 @@ engine records a fingerprint of the proxy keyed with its API token, and a comman
 asking for a different proxy (or none) refuses to use a running engine instead
 of sharing it. To switch, stop watch/MCP processes, run `wallapop auth service
 stop` (disable the auth service first if it is enabled), and run the command
-again. `auth service enable` and `watch service install` pin `WALLAPOP_PROXY`
-into the unit and refuse one with credentials; on Windows, where a task cannot
-carry it, set the proxy with `wallapop config set proxy` instead. With an
-external daemon, the CLI only checks that its wallapop provider reports a proxy.
+again. `auth service enable` and `watch service install` pin `WALLAPOP_PROXY`,
+and the variables that locate config.toml (`HOME`, `XDG_CONFIG_HOME`,
+`WALLAPOP_CONFIG`), into the unit, and refuse a `WALLAPOP_PROXY` with
+credentials; on Windows, where a task cannot carry it, set the proxy with
+`wallapop config set proxy` instead. A config.toml edited by hand to hold proxy
+credentials is refused like `config set` refuses it. With an external daemon,
+the CLI only checks that its wallapop provider reports a proxy.
 
 ## Blocks and pauses
 

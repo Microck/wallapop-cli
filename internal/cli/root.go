@@ -231,6 +231,9 @@ func (a *App) applyProxy() error {
 	if err != nil {
 		return output.Usagef("%s: %v. Nothing is sent to wallapop until it is fixed", src, err)
 	}
+	if u.User != nil && src != galleton.ProxyEnv {
+		return output.Usagef("config proxy: config.toml is world-readable, so it must not hold proxy credentials. Remove them with `wallapop config set proxy URL` and pass a proxy with credentials through WALLAPOP_PROXY. Nothing is sent to wallapop until it is fixed")
+	}
 	a.Client.UseProxy(u)
 	a.proxy = u.String()
 	return nil

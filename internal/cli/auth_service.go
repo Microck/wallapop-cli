@@ -96,8 +96,9 @@ func (a *App) authServiceUnit() (*serviceUnit, string, error) {
 }
 
 // Service definitions use absolute paths and never copy credential environment
-// variables. env holds only WALLAPOP_PROXY, checked to carry no credentials,
-// so renewal keeps using the proxy the CLI uses.
+// variables. env is serviceEnv(): the variables that locate config.toml (so the
+// service reads the same proxy setting) plus WALLAPOP_PROXY, checked to carry
+// no credentials, so renewal keeps using the proxy the CLI uses.
 func authServiceDefinition(platform, name, exe, dir string, env [][2]string) string {
 	if platform == "systemd" {
 		var envLines strings.Builder
@@ -158,10 +159,9 @@ func (a *App) authServiceChange(ctx context.Context, enable bool) error {
 		if err := serviceProxyCheck(u.platform == "schtasks"); err != nil {
 			return err
 		}
-		var env [][2]string
-		if v := os.Getenv(galleton.ProxyEnv); v != "" {
-			env = append(env, [2]string{galleton.ProxyEnv, v})
-		}
+		// The same environment the watch units pin, so the service finds the
+		// same config.toml, and with it the same proxy, as this command.
+		env := serviceEnv()
 		// Prove startup works before registering it with the user's OS session.
 		if _, err := a.galletonClient(ctx); err != nil {
 			return err

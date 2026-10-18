@@ -119,6 +119,25 @@ func TestInvalidProxyIsAUsageErrorAndConfigCanFixIt(t *testing.T) {
 	}
 }
 
+// A hand-edited config.toml with proxy credentials is refused like
+// `config set` refuses it, and nothing is sent until it is fixed.
+func TestConfigProxyWithCredentialsIsRefused(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv("WALLAPOP_PROXY", "")
+	path := filepath.Join(h.home, "config", "wallapop-cli", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("proxy = \"http://bob:hunter22@"+closedAddr(t)+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := h.run("", "search", "bici", "--lat", "40", "--lng", "-3")
+	if r.code != 2 || !strings.Contains(r.stderr, "WALLAPOP_PROXY") || strings.Contains(r.stderr, "hunter22") || len(h.fake.RequestsUnder("/")) != 0 {
+		t.Fatalf("exit %d, %d requests\n%s", r.code, len(h.fake.RequestsUnder("/")), r.stderr)
+	}
+	h.must("", "config", "set", "proxy", "socks5h://127.0.0.1:1080")
+}
+
 // An external daemon that renews directly must not be used while the CLI is
 // told to send everything through a proxy.
 func TestProxyRefusesAnUnproxiedExternalDaemon(t *testing.T) {
