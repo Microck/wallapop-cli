@@ -779,16 +779,25 @@ var (
 )
 
 // serviceProxyCheck runs before a scheduled job is installed. WALLAPOP_PROXY
-// is copied into unit files, so it must not carry credentials, and a Windows
-// task cannot carry it at all, so the job would connect directly. The config
-// proxy needs neither: the job reads config.toml itself.
-func serviceProxyCheck(windows bool) error {
+// is copied into unit files, so it must not carry credentials. A Windows task
+// carries no environment at all: it cannot get WALLAPOP_PROXY, and it reads
+// config.toml from the default location, so a config proxy only reaches it
+// when no WALLAPOP_CONFIG or XDG_CONFIG_HOME points elsewhere. Either way the
+// job would connect directly, so install refuses. configProxy is the loaded
+// config's proxy.
+func serviceProxyCheck(windows bool, configProxy string) error {
 	raw := os.Getenv(galleton.ProxyEnv)
-	if raw == "" {
+	if windows {
+		if raw != "" {
+			return output.Usagef("a Windows scheduled task does not get WALLAPOP_PROXY, so it would connect directly. Set the proxy with `wallapop config set proxy URL` and unset WALLAPOP_PROXY")
+		}
+		if configProxy != "" && (os.Getenv("WALLAPOP_CONFIG") != "" || os.Getenv("XDG_CONFIG_HOME") != "") {
+			return output.Usagef("a Windows scheduled task does not get WALLAPOP_CONFIG or XDG_CONFIG_HOME, so it would read another config.toml and connect without the proxy. Keep the proxy in the default config.toml and unset them")
+		}
 		return nil
 	}
-	if windows {
-		return output.Usagef("a Windows scheduled task does not get WALLAPOP_PROXY, so it would connect directly. Set the proxy with `wallapop config set proxy URL` and unset WALLAPOP_PROXY")
+	if raw == "" {
+		return nil
 	}
 	u, err := wallapop.ParseProxy(raw)
 	if err != nil {
@@ -906,7 +915,7 @@ func (a *App) serviceInstall(iv time.Duration) error {
 		return err
 	}
 	u := a.serviceUnit()
-	if err := serviceProxyCheck(runtime.GOOS == "windows"); err != nil {
+	if err := serviceProxyCheck(runtime.GOOS == "windows", a.Cfg.Proxy); err != nil {
 		return err
 	}
 	if u == nil {

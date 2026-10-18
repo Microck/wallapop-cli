@@ -48,19 +48,33 @@ func TestServiceEnvPinsTheProxyWithoutCredentials(t *testing.T) {
 	for _, kv := range serviceEnv() {
 		found = found || kv == [2]string{"WALLAPOP_PROXY", "socks5h://127.0.0.1:1080"}
 	}
-	if !found || serviceProxyCheck(false) != nil {
+	if !found || serviceProxyCheck(false, "") != nil {
 		t.Fatal("the proxy was not pinned into the unit environment")
 	}
-	if err := serviceProxyCheck(true); err == nil || !strings.Contains(err.Error(), "config set proxy") {
+	if err := serviceProxyCheck(true, ""); err == nil || !strings.Contains(err.Error(), "config set proxy") {
 		t.Fatalf("windows: %v", err)
 	}
 	t.Setenv("WALLAPOP_PROXY", "http://user:pw@127.0.0.1:3128")
-	if err := serviceProxyCheck(false); err == nil || strings.Contains(err.Error(), "pw") {
+	if err := serviceProxyCheck(false, ""); err == nil || strings.Contains(err.Error(), "pw") {
 		t.Fatalf("credentials: %v", err)
 	}
 	t.Setenv("WALLAPOP_PROXY", "")
-	if serviceProxyCheck(true) != nil {
-		t.Fatal("the config proxy needs no check: the job reads config.toml itself")
+	t.Setenv("WALLAPOP_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if serviceProxyCheck(true, "socks5h://127.0.0.1:1080") != nil {
+		t.Fatal("a proxy in the default config.toml reaches a Windows task")
+	}
+	// A task gets no environment, so a config found through these variables
+	// is not the one it reads.
+	for _, key := range []string{"WALLAPOP_CONFIG", "XDG_CONFIG_HOME"} {
+		t.Setenv(key, `C:\Users\u\elsewhere`)
+		if err := serviceProxyCheck(true, "socks5h://127.0.0.1:1080"); err == nil || !strings.Contains(err.Error(), key) {
+			t.Fatalf("%s: %v", key, err)
+		}
+		if serviceProxyCheck(true, "") != nil {
+			t.Fatalf("%s without a proxy needs no check", key)
+		}
+		t.Setenv(key, "")
 	}
 }
 

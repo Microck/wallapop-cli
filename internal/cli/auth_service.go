@@ -156,7 +156,7 @@ func (a *App) authServiceChange(ctx context.Context, enable bool) error {
 		return nil
 	}
 	if enable {
-		if err := serviceProxyCheck(u.platform == "schtasks"); err != nil {
+		if err := serviceProxyCheck(u.platform == "schtasks", a.Cfg.Proxy); err != nil {
 			return err
 		}
 		// The same environment the watch units pin, so the service finds the
