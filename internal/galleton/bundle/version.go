@@ -7,6 +7,6 @@ import _ "embed"
 var License []byte
 
 const Module = "github.com/Microck/galleton"
-const Version = "v0.0.0-20261004115250-efe7b742536d"
-const Sum = "h1:ZGHG3/JvJPX2N+usV0KrSYGsueorzoDaZL+fblpqU84="
+const Version = "v0.1.0"
+const Sum = "h1:pcgroA8gfunV0GNRt9n+Jrt3ra59IXgBF9pRI/VTpRU="
 const ModSum = "h1:hp07LS66wDIysy70Z7P0Q7WOZEFP63hYsVC7gx4B+yk="

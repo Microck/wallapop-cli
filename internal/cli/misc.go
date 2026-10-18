@@ -16,6 +16,7 @@ import (
 	"github.com/Microck/wallapop-cli/internal/config"
 	"github.com/Microck/wallapop-cli/internal/output"
 	"github.com/Microck/wallapop-cli/internal/sink"
+	"github.com/Microck/wallapop-cli/internal/wallapop"
 )
 
 // config
@@ -34,6 +35,7 @@ Examples:
   wallapop config set sinks.phone.url https://ntfy.sh
   wallapop config set sinks.phone.topic wallapop-deals
   wallapop config set sinks.script.command '["/home/me/bin/on-event", "--verbose"]'
+  wallapop config set proxy socks5h://127.0.0.1:1080
   wallapop config get sinks.phone`,
 	}
 	cmd.AddCommand(
@@ -85,6 +87,15 @@ Examples:
 			var cfg config.Config
 			if err := dec.Decode(&cfg); err != nil {
 				return output.Usagef("%q is not a valid config key: %v", args[0], err)
+			}
+			if args[0] == "proxy" && cfg.Proxy != "" {
+				u, err := wallapop.ParseProxy(cfg.Proxy)
+				if err != nil {
+					return output.Usagef("proxy: %v", err)
+				}
+				if u.User != nil {
+					return output.Usagef("proxy: config.toml is world-readable, so it must not hold proxy credentials. Pass a proxy with credentials through WALLAPOP_PROXY instead")
+				}
 			}
 			a.Cfg = cfg
 			if err := a.saveConfig(); err != nil {
@@ -178,7 +189,7 @@ func (r doctorReport) Pretty(w io.Writer, color bool) {
 
 func (a *App) doctorCmd() *cobra.Command {
 	return &cobra.Command{
-		Use: "doctor", Short: "Check config, session, api reachability, chat token and schedule", Args: cobra.NoArgs,
+		Use: "doctor", Short: "Check config, proxy, session, api reachability, chat token and schedule", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			rep := doctorReport{OK: true}
@@ -193,6 +204,11 @@ func (a *App) doctorCmd() *cobra.Command {
 			add("config", nil, a.Paths.ConfigFile)
 			for name, s := range a.Cfg.Sinks {
 				add("sink "+name, sink.Validate(name, s), s.Type)
+			}
+			if a.Client.Proxy != "" {
+				add("proxy", nil, a.Client.Proxy+" (all wallapop traffic and session renewals, no direct fallback)")
+			} else {
+				add("proxy", nil, "none (direct connection)")
 			}
 			if _, err := a.Client.Categories(ctx); err != nil {
 				add("api reachable", err, "")

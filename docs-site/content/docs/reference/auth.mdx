@@ -23,10 +23,16 @@ Wallapop keeps the durable login in an HttpOnly cookie, so the CLI needs a
 cookie export from a browser where you are logged in:
 
   1. Install a cookie export extension (Cookie-Editor works) and open es.wallapop.com.
-  2. Export cookies as Netscape/text and save the file, or copy the value of
-     the cookie named __Secure-next-auth.session-token.
+  2. Export the cookies, or copy the value of the cookie named
+     __Secure-next-auth.session-token.
   3. Run this command and paste the file path or the value when asked, or pass
      --cookies FILE / --cookies-stdin.
+
+These exports work, and the format is detected (--cookies-format overrides it):
+Netscape cookies.txt, Cookie-Editor or EditThisCookie JSON (an array or a
+\{"url", "cookies"} wrapper), a DevTools or Playwright cookie list, a Cookie:
+header or a=b; c=d pairs, or the bare session cookie value. A whole-browser
+export is fine: only wallapop.com cookies are read.
 
 The CLI starts its bundled Galleton session engine automatically. The engine
 renews tokens and stores rotated cookies in its encrypted private vault.
@@ -36,12 +42,14 @@ same way, since the cookie is what the browser holds after any login method.
 ```bash
 wallapop auth login
 wallapop auth login --cookies ~/Downloads/es.wallapop.com_cookies.txt --profile work
+wallapop auth login --cookies ~/Downloads/cookies.json
 cat cookies.txt | wallapop auth login --cookies-stdin
 ```
 
 | Flag | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--cookies` | string | - | path to a Netscape cookie export |
+| `--cookies` | string | - | path to a cookie export (cookies.txt, Cookie-Editor JSON, Cookie header) |
+| `--cookies-format` | string | `auto` | cookie export format: auto, netscape, json, header |
 | `--cookies-stdin` | bool | `false` | read the cookie export from stdin |
 
 ## `wallapop auth logout`

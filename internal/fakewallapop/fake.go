@@ -112,6 +112,7 @@ type Server struct {
 
 	// Failure knobs.
 	BlockNextAPI  bool // next api.wallapop.com request gets a CloudFront 403
+	BlockAPI      bool // every api.wallapop.com request gets a CloudFront 403
 	MintEmpty     bool // /api/auth/session answers {} (invalid session)
 	MalformedItem bool // /api/v3/items/{hash} answers non-JSON
 	PictureStatus int  // nonzero rejects picture2 uploads
@@ -206,7 +207,7 @@ func (s *Server) RequestsUnder(prefix string) []Request {
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.Requests = append(s.Requests, Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.Query(), UA: r.UserAgent(), Auth: r.Header.Get("Authorization")})
-	block := s.BlockNextAPI && strings.HasPrefix(r.URL.Path, "/api/v3/")
+	block := (s.BlockNextAPI || s.BlockAPI) && strings.HasPrefix(r.URL.Path, "/api/v3/")
 	if block {
 		s.BlockNextAPI = false
 	}

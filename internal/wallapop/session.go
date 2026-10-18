@@ -1,16 +1,18 @@
 package wallapop
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Microck/galleton/cookiefile"
 )
 
 // SessionCookieName is the NextAuth cookie that carries the 30-day web session.
@@ -131,59 +133,59 @@ func jwtExpiry(tok string) time.Time {
 	return time.Unix(claims.Exp, 0)
 }
 
-// ParseCookieExport reads a Netscape cookie file (Cookie-Editor, curl, browser
-// exporters) and returns the session cookie and device id. It also accepts a
-// bare cookie value, a `name=value` pair, or a `Cookie:` header line, so users
-// can paste whatever they copied.
-func ParseCookieExport(r io.Reader) (sessionCookie, deviceID string, err error) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		// Netscape format: domain, flag, path, secure, expiry, name, value.
-		// HttpOnly cookies are prefixed "#HttpOnly_" but still tab-separated.
-		if fields := strings.Split(line, "\t"); len(fields) >= 7 {
-			switch fields[5] {
-			case SessionCookieName:
-				sessionCookie = fields[6]
-			case "device_id":
-				deviceID = fields[6]
-			}
-			continue
-		}
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
-		// Header or pasted pairs: "Cookie: a=b; c=d" or "a=b; c=d".
-		line = strings.TrimPrefix(line, "Cookie:")
-		for _, pair := range strings.Split(line, ";") {
-			pair = strings.TrimSpace(pair)
-			name, value, found := strings.Cut(pair, "=")
-			if !found {
-				// A bare value: the session token is a long JWE with dots.
-				if strings.Count(pair, ".") >= 2 && len(pair) > 100 {
-					sessionCookie = pair
-				}
-				continue
-			}
-			switch strings.TrimSpace(name) {
-			case SessionCookieName:
-				sessionCookie = strings.TrimSpace(value)
-			case "device_id":
-				deviceID = strings.TrimSpace(value)
-			}
-		}
-	}
-	if err := sc.Err(); err != nil {
+// CookieFormats lists the export formats ParseCookieExport accepts.
+var CookieFormats = []string{cookiefile.Auto, cookiefile.Netscape, cookiefile.JSON, cookiefile.Header}
+
+// ParseCookieExport reads a browser cookie export with Galleton's cookiefile
+// parser and returns the session cookie and device id. format is auto (or
+// empty), netscape (cookies.txt), json (Cookie-Editor or EditThisCookie, as an
+// array or a {"url", "cookies"} wrapper, and DevTools/Playwright lists) or
+// header (`Cookie: a=b; c=d` or `a=b; c=d`). Only cookies for hosts are read,
+// so a whole-browser export works and another site's NextAuth session cookie
+// is never picked up. A bare session token, as copied from the browser, is
+// accepted too.
+func ParseCookieExport(r io.Reader, format string, hosts ...string) (sessionCookie, deviceID string, err error) {
+	data, err := io.ReadAll(io.LimitReader(r, cookiefile.MaxInput+1))
+	if err != nil {
 		return "", "", err
+	}
+	if format == "" {
+		format = cookiefile.Auto
+	}
+	if token := strings.TrimSpace(string(data)); format == cookiefile.Auto && isBareSessionToken(token) {
+		return token, "", nil
+	}
+	cookies, _, err := cookiefile.Parse(data, format, hosts...)
+	if err != nil {
+		return "", "", err
+	}
+	// The host filter keeps cookies without a domain (a Cookie header, a JSON
+	// entry without one), since nothing says where they belong. When the
+	// export scopes any cookie to a Wallapop host, the unscoped ones may come
+	// from any site and are ignored; they count only in an export that has no
+	// domains at all, such as a Cookie header.
+	scopedExport := slices.ContainsFunc(cookies, func(c cookiefile.Cookie) bool { return c.Domain != "" })
+	for _, c := range cookies {
+		if scopedExport && c.Domain == "" {
+			continue
+		}
+		switch c.Name {
+		case SessionCookieName:
+			sessionCookie = c.Value
+		case "device_id":
+			deviceID = c.Value
+		}
 	}
 	if sessionCookie == "" {
 		return "", "", errors.New("no " + SessionCookieName + " cookie found in the input")
 	}
 	return sessionCookie, deviceID, nil
+}
+
+// isBareSessionToken recognizes the session cookie's value on its own: a long
+// JWE with dots and none of the separators the export formats use.
+func isBareSessionToken(s string) bool {
+	return len(s) > 100 && strings.Count(s, ".") >= 2 && !strings.ContainsAny(s, "=;:\t\n\r {}[]\"")
 }
 
 // NewDeviceID makes a fresh device id for imports whose export lacked the

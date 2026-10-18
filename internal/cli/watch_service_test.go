@@ -39,6 +39,45 @@ func TestServiceEnvCarriesThePathVariablesButNotTheSessionSecret(t *testing.T) {
 	}
 }
 
+// A scheduled check reads the same proxy as the shell that installed it, or
+// it would reach Wallapop directly. One with credentials is refused, since
+// unit files are world-readable, and Windows tasks cannot carry it at all.
+func TestServiceEnvPinsTheProxyWithoutCredentials(t *testing.T) {
+	t.Setenv("WALLAPOP_PROXY", "socks5h://127.0.0.1:1080")
+	found := false
+	for _, kv := range serviceEnv() {
+		found = found || kv == [2]string{"WALLAPOP_PROXY", "socks5h://127.0.0.1:1080"}
+	}
+	if !found || serviceProxyCheck(false, "") != nil {
+		t.Fatal("the proxy was not pinned into the unit environment")
+	}
+	if err := serviceProxyCheck(true, ""); err == nil || !strings.Contains(err.Error(), "config set proxy") {
+		t.Fatalf("windows: %v", err)
+	}
+	t.Setenv("WALLAPOP_PROXY", "http://user:pw@127.0.0.1:3128")
+	if err := serviceProxyCheck(false, ""); err == nil || strings.Contains(err.Error(), "pw") {
+		t.Fatalf("credentials: %v", err)
+	}
+	t.Setenv("WALLAPOP_PROXY", "")
+	t.Setenv("WALLAPOP_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if serviceProxyCheck(true, "socks5h://127.0.0.1:1080") != nil {
+		t.Fatal("a proxy in the default config.toml reaches a Windows task")
+	}
+	// A task gets no environment, so a config found through these variables
+	// is not the one it reads.
+	for _, key := range []string{"WALLAPOP_CONFIG", "XDG_CONFIG_HOME"} {
+		t.Setenv(key, `C:\Users\u\elsewhere`)
+		if err := serviceProxyCheck(true, "socks5h://127.0.0.1:1080"); err == nil || !strings.Contains(err.Error(), key) {
+			t.Fatalf("%s: %v", key, err)
+		}
+		if serviceProxyCheck(true, "") != nil {
+			t.Fatalf("%s without a proxy needs no check", key)
+		}
+		t.Setenv(key, "")
+	}
+}
+
 func TestSystemdUnitPinsTheInstallEnvironmentAndQuotesTheExecutable(t *testing.T) {
 	env := [][2]string{{"XDG_DATA_HOME", "/home/u/my data"}}
 	service, timer := systemdUnits("default", "/opt/my apps/wallapop", checkArgs, "/home/u/state/w.log", 10*time.Minute, env)

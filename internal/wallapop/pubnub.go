@@ -84,7 +84,7 @@ func (ch *Chat) Send(ctx context.Context, conv Conversation, text string) (strin
 	q.Set("meta", string(metaJSON))
 	path := fmt.Sprintf("/publish/%s/%s/0/%s/0/%s", pubNubPublishKey, pubNubSubscribeKey, url.PathEscape(conv.Channel), url.PathEscape(string(msgJSON)))
 	var out []any
-	if _, err := ch.client.do(ctx, request{method: http.MethodGet, base: ch.client.PubNubBase, path: path, query: q}, &out); err != nil {
+	if _, err := ch.client.do(ctx, request{method: http.MethodGet, base: ch.client.PubNubBase, pubnub: true, path: path, query: q}, &out); err != nil {
 		return "", pubnubError(err)
 	}
 	// PubNub answers [1, "Sent", "<timetoken>"].
@@ -126,7 +126,7 @@ func (ch *Chat) MarkSeen(ctx context.Context, channel, timeToken string) error {
 		return err
 	}
 	path := fmt.Sprintf("/v1/message-actions/%s/channel/%s/message/%s", pubNubSubscribeKey, url.PathEscape(channel), timeToken)
-	_, err := ch.client.do(ctx, request{method: http.MethodPost, base: ch.client.PubNubBase, path: path, query: ch.baseQuery(),
+	_, err := ch.client.do(ctx, request{method: http.MethodPost, base: ch.client.PubNubBase, pubnub: true, path: path, query: ch.baseQuery(),
 		body: map[string]string{"type": "seen", "value": "{}"}, acceptStatus: []int{http.StatusConflict}}, nil)
 	return pubnubError(err)
 }
@@ -179,8 +179,7 @@ func (ch *Chat) Subscribe(ctx context.Context, fn func(Incoming)) error {
 				} `json:"p"`
 			} `json:"m"`
 		}
-		_, err := ch.client.do(ctx, request{method: http.MethodGet, base: ch.client.PubNubBase,
-			path:  fmt.Sprintf("/v2/subscribe/%s/%s/0", pubNubSubscribeKey, url.PathEscape(channel)),
+		_, err := ch.client.do(ctx, request{method: http.MethodGet, base: ch.client.PubNubBase, pubnub: true, path: fmt.Sprintf("/v2/subscribe/%s/%s/0", pubNubSubscribeKey, url.PathEscape(channel)),
 			query: q, httpClient: &poller}, &out)
 		if err != nil {
 			if ctx.Err() != nil {

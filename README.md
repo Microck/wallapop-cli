@@ -87,15 +87,17 @@ wallapop --version
 wallapop doctor
 ```
 
-`doctor` checks that the config parses, the session mints, wallapop is reachable, and the cli can fetch the chat token.
+`doctor` checks that the config parses, shows the proxy in use, checks that the session mints, wallapop is reachable, and the cli can fetch the chat token.
 
 ### auth
 
 wallapop keeps your login in an http-only browser cookie, so the cli imports it instead of asking for a password. password, google, apple, and facebook accounts all work the same way.
 
 1. log in at es.wallapop.com in your browser
-2. export cookies as a netscape/text file with an extension such as cookie-editor, or copy the value of `__Secure-next-auth.session-token`
+2. export cookies with an extension such as cookie-editor, or copy the value of `__Secure-next-auth.session-token`
 3. run `wallapop auth login` and paste the file path or the value, or pass `--cookies FILE`
+
+the export can be a netscape `cookies.txt`, cookie-editor or editthiscookie json (array or `{"url", "cookies"}` wrapper), a devtools cookie list, a `Cookie:` header, or the bare cookie value. the format is detected (`--cookies-format` overrides it) and only wallapop.com cookies are read, so a whole-browser export works too.
 
 ```bash
 # interactive prompt (paste cookie value or file path)
@@ -103,6 +105,7 @@ wallapop auth login
 
 # import from an exported cookie file
 wallapop auth login --cookies ~/Downloads/cookies.txt
+wallapop auth login --cookies ~/Downloads/cookies.json
 
 # read from stdin
 cat cookies.txt | wallapop auth login --cookies-stdin
@@ -144,6 +147,16 @@ for ci, pass `WALLAPOP_SESSION_TOKEN` in the environment so the cli writes no cr
 export WALLAPOP_SESSION_TOKEN="..."
 wallapop search "bici" --format jsonl
 ```
+
+### proxy
+
+set `proxy` in config.toml or `WALLAPOP_PROXY` (`socks5h://127.0.0.1:1080`, `http://host:port`). all wallapop traffic then goes through it, session renewals included, and if it is unreachable the command fails with exit `6`; it never falls back to a direct connection. config.toml is world-readable, so a proxy with credentials goes in `WALLAPOP_PROXY` only.
+
+```bash
+wallapop config set proxy socks5h://127.0.0.1:1080
+```
+
+when wallapop's cloudfront blocks a request (its 403 page, or a 429), the command exits `5` and the cli pauses session renewals for 15 minutes so they stop knocking from the same address. `wallapop auth service status` shows the pause. see [session lifecycle and recovery](docs/galleton.md#blocks-and-pauses).
 
 ## updates
 

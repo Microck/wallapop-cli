@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Microck/wallapop-cli/internal/config"
 	"github.com/Microck/wallapop-cli/internal/fakewallapop"
@@ -27,6 +28,9 @@ type fakeGalleton struct {
 	calls        []string
 	fail         bool
 	deleteStatus int
+	proxied      bool
+	pauses       []int
+	pausedUntil  time.Time
 }
 
 func enableGalleton(t *testing.T) *fakeGalleton {
@@ -45,6 +49,26 @@ func enableGalleton(t *testing.T) *fakeGalleton {
 		if d.fail {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "unavailable", "message": "daemon-secret " + fakewallapop.ValidCookie}})
+			return
+		}
+		if r.URL.Path == "/v1/providers" {
+			p := map[string]any{"name": "wallapop", "kind": "http", "origins": []string{"https://es.wallapop.com", "https://api.wallapop.com"}, "proxied": d.proxied}
+			if !d.pausedUntil.IsZero() {
+				p["paused_until"] = d.pausedUntil
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"providers": []any{p}})
+			return
+		}
+		if r.URL.Path == "/v1/providers/wallapop/pause" && r.Method == http.MethodPost {
+			var in struct{ Seconds int }
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+				t.Error(err)
+			}
+			d.pauses = append(d.pauses, in.Seconds)
+			if until := time.Now().Add(time.Duration(in.Seconds) * time.Second).UTC().Truncate(time.Second); until.After(d.pausedUntil) {
+				d.pausedUntil = until
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"provider": "wallapop", "paused_until": d.pausedUntil})
 			return
 		}
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/sessions/"), "/")
@@ -81,6 +105,13 @@ func enableGalleton(t *testing.T) *fakeGalleton {
 			delete(d.cookies, id)
 			delete(d.tokens, id)
 		} else if len(parts) == 2 && (parts[1] == "headers" || parts[1] == "refresh") {
+			// Like the daemon: a paused provider serves a held token but
+			// starts no renewal.
+			if time.Now().Before(d.pausedUntil) && (d.tokens[id] == "" || parts[1] == "refresh") {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "provider_paused", "message": "paused", "retry_at": d.pausedUntil.Format(time.RFC3339)}})
+				return
+			}
 			if d.provider != nil && (d.tokens[id] == "" || parts[1] == "refresh") {
 				req, _ := http.NewRequest(http.MethodGet, d.provider.URL+"/api/auth/session", nil)
 				req.Header.Set("Cookie", d.cookies[id])

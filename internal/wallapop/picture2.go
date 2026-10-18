@@ -109,6 +109,7 @@ func (c *Client) doRequest(ctx context.Context, req *http.Request, rebuild func(
 	}
 	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
 	if !ok {
+		c.reportBlock(ctx, resp.StatusCode, raw)
 		return resp, c.statusError(endpoint, resp.StatusCode, raw)
 	}
 	if out != nil && len(bytes.TrimSpace(raw)) > 0 {

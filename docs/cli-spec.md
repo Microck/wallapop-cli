@@ -42,9 +42,13 @@ completion <shell>
 
 ### auth
 
-- `auth login [--profile NAME] [--cookies FILE | --cookies-stdin]`
-  Default is the cookie import prompt: it asks for a Netscape cookie export (Cookie-Editor or
-  similar) or the pasted value of `__Secure-next-auth.session-token`, reads that cookie plus
+- `auth login [--profile NAME] [--cookies FILE | --cookies-stdin] [--cookies-format auto|netscape|json|header]`
+  Default is the cookie import prompt: it asks for a cookie export or the pasted value of
+  `__Secure-next-auth.session-token`. Exports are parsed by Galleton's `cookiefile` package:
+  Netscape `cookies.txt`, Cookie-Editor/EditThisCookie JSON (array or `{"url", "cookies"}`
+  wrapper), DevTools/Playwright cookie lists, and `Cookie:` headers; a bare session value is
+  also accepted. Only cookies for the Wallapop web and API hosts are read, so a whole-browser
+  export cannot supply another site's NextAuth cookie. It reads that cookie plus
   `device_id`, mints an Access token once to validate, stores the Session, and seeds the
   Profile's default Location from `GET /api/v3/users/me`. Every login method (password,
   Google, Apple, Facebook) ends in the same browser cookie, so this is the only path.
@@ -61,14 +65,25 @@ completion <shell>
 - `auth service run` keeps renewal in the foreground. `enable` explicitly installs a user
   OS-login service/task, `disable` removes it, `status` inspects without starting it, and
   `stop` drains an idle engine. Active clients prevent shutdown. No service is installed
-  automatically.
+  automatically. `status` also reports, from a running engine, `proxied`,
+  `paused_until`, and `proxy_mismatch` when it runs with another proxy setting.
 
-Session mechanics: a pinned Galleton executable is included in release binaries and managed
-by the CLI. It renews through the existing `GET /api/auth/session` endpoint, extracts
+Session mechanics: a pinned Galleton v0.1.0 executable is included in release binaries and
+managed by the CLI. It renews through the existing `GET /api/auth/session` endpoint, extracts
 `/token`, requires a replacement cookie, and persists rotated credentials in its encrypted
 vault. The provider adapter's interval is 240 seconds, not a promise about token lifetime.
-Only the bearer token is handed to the existing API transport. Uploads and PubNub keep
-separate transports.
+Its `block_signatures` turn a CloudFront 403 page, or any non-JSON 403, during renewal into a
+temporary refusal (`upstream_blocked`, exit 5) that keeps the session; `min_interval_ms`
+spaces renewals one second apart. When a proxy is set, the adapter gets
+`proxy_env: WALLAPOP_PROXY` and the engine gets the URL in its environment only; a running
+engine with a different proxy setting is refused, not shared. These fields are outside
+Galleton's configuration hash, so sessions imported by v0.3.x keep working. Only the bearer
+token is handed to the existing API transport. Uploads and PubNub keep separate transports.
+
+When a request of the CLI's own meets Wallapop's bot protection (a non-JSON 403 after the
+browser user agent retry, or a 429), the CLI pauses the engine it already uses for 15
+minutes through Galleton's persisted provider pause. Paused renewals fail with
+`provider_paused` and the pause's end time (exit 5); a held token keeps working.
 
 Session lifetime remains controlled by Wallapop. The historical sliding-cookie behavior
 recorded in ADR 0001 does not establish indefinite validity. No renewal is automatically
@@ -289,13 +304,15 @@ Watches, Checks, Events and Sinks are defined in `CONTEXT.md`.
   it prints the `schtasks` command to run by hand in cmd.exe (whole minutes, rounded up).
   Other platforms get a usage error. The unit pins the environment that decides where the
   CLI reads and writes: `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`,
-  `WALLAPOP_CONFIG` and the three base-URL overrides go into the unit as they stood at
+  `WALLAPOP_CONFIG`, `WALLAPOP_PROXY` and the three base-URL overrides go into the unit as they stood at
   install time, because a scheduler starts a job with a bare environment and the timer would
   otherwise check a different, empty state database and report nothing. A relative XDG value
   is left out, since the CLI ignores it too and falls back to the `HOME` default; a relative
   `WALLAPOP_CONFIG` is made absolute, since that one is read raw and the scheduler runs the
   job from its own working directory.
-  `WALLAPOP_SESSION_TOKEN` is never written: unit files are world-readable. Install refuses
+  `WALLAPOP_SESSION_TOKEN` is never written: unit files are world-readable. For the same
+  reason install refuses a `WALLAPOP_PROXY` carrying credentials, and on Windows, where the
+  printed task cannot carry it, any `WALLAPOP_PROXY` (use the config `proxy`). Install refuses
   outright when a path that would go into the unit is relative, which happens when `HOME`
   itself is relative: systemd ignores a relative `StandardOutput=` and would not look where
   the units landed. `uninstall` fails if the scheduler cannot be stopped. On
@@ -419,9 +436,12 @@ and leave the previous config unchanged.
 
 ### config / doctor / skills / completion
 
-- `config path | list | get KEY | set KEY VALUE` on `config.toml`.
-- `doctor` checks: config parses, Session mints, `api.wallapop.com` reachable, PubNub token
-  obtainable, service unit state. Exit 1 if any check fails.
+- `config path | list | get KEY | set KEY VALUE` on `config.toml`. `set proxy` validates
+  the scheme (`http`, `https`, `socks5`, `socks5h`), host and port, and refuses credentials
+  because the file is world-readable; a rejected value is exit 2 and leaves the file untouched.
+- `doctor` checks: config parses, proxy in use (without credentials), Session mints,
+  `api.wallapop.com` reachable, PubNub token obtainable, service unit state. Exit 1 if any
+  check fails.
 - `skills list | get NAME` prints the embedded agent-facing docs (usage, output shapes).
 - `completion bash|zsh|fish|powershell` (cobra).
 
@@ -456,7 +476,7 @@ and leave the previous config unchanged.
 | 2 | usage: bad flags, unknown filter key, missing location |
 | 3 | auth: no Session, Session rejected, MFA pending |
 | 4 | not found: item/user/conversation/watch |
-| 5 | blocked or rate limited (CloudFront 403, 429) |
+| 5 | blocked or rate limited (CloudFront 403, 429), or session renewal paused after one |
 | 6 | network / timeout |
 | 7 | API changed: known endpoint returned an unexpected shape or status |
 | 130 | interrupted |
@@ -497,6 +517,7 @@ Config (`pelletier/go-toml/v2`, unknown keys are errors):
 
 ```toml
 default_profile = "default"
+proxy = "socks5h://127.0.0.1:1080"   # optional; WALLAPOP_PROXY overrides it
 
 [profiles.default]
 location = { lat = 40.4168, lng = -3.7038, radius_km = 20 }
@@ -513,7 +534,12 @@ topic = "wallapop"
 Env: `WALLAPOP_PROFILE`, `WALLAPOP_CONFIG` (config file path), `WALLAPOP_SESSION_TOKEN`
 (session cookie value for CI, wins over the credentials file), `WALLAPOP_ERROR_FORMAT`,
 `WALLAPOP_API_BASE_URL` / `WALLAPOP_WEB_BASE_URL` / `WALLAPOP_PUBNUB_BASE_URL` (tests),
-`NO_COLOR`, `HTTPS_PROXY`. Precedence: flags > env > config.
+`WALLAPOP_PROXY`, `NO_COLOR`. `WALLAPOP_PROXY` (or config `proxy`) sends every Wallapop and
+PubNub request and every session renewal through that proxy, ignores `HTTPS_PROXY` and
+`NO_PROXY`, and fails with exit 6 rather than going direct when the proxy is unreachable;
+an invalid proxy fails every command but `config` with exit 2. Without one,
+`HTTPS_PROXY`/`HTTP_PROXY` apply to the CLI's own requests only. Precedence: flags > env >
+config.
 
 ## 10. Safety
 

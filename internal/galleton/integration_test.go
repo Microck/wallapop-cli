@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,12 +28,7 @@ import (
 // provider accepts only the most recently issued cookie, making lost rotation
 // visible after restart. No real Wallapop endpoint is contacted.
 func TestRealDaemonPersistsRotationAcrossRestart(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("hermetic SSL_CERT_FILE trust is Linux-only; native lifecycle tests run on every supported OS")
-	}
-	if len(bundle.Binary) == 0 {
-		t.Skip("requires generated bundle")
-	}
+	requireRealEngine(t)
 	var mu sync.Mutex
 	cookie := "initial-test-credential"
 	calls := 0
@@ -47,20 +46,7 @@ func TestRealDaemonPersistsRotationAcrossRestart(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"token": fmt.Sprintf("test-access-%d", calls)})
 	}))
 	defer provider.Close()
-	dir := filepath.Join(t.TempDir(), "vault")
-	if err := privateDir(dir); err != nil {
-		t.Fatal(err)
-	}
-	binary, err := engineBinary(context.Background(), dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert := filepath.Join(t.TempDir(), "provider.pem")
-	if err := os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: provider.Certificate().Raw}), 0600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("SSL_CERT_FILE", cert)
-	t.Setenv("SSL_CERT_DIR", t.TempDir())
+	dir, binary := engineDir(t, provider)
 	cfg := []byte(fmt.Sprintf(`{"providers":[{"name":"wallapop","kind":"http","origins":[%q],"refresh_url":%q,"refresh_method":"GET","refresh_interval_seconds":240,"response":{"access_token_pointer":"/token","require_set_cookie":true}}]}`, provider.URL, provider.URL+"/api/auth/session"))
 	configPath := filepath.Join(dir, "test-adapters.json")
 	if err := os.WriteFile(configPath, cfg, 0600); err != nil {
@@ -68,70 +54,12 @@ func TestRealDaemonPersistsRotationAcrossRestart(t *testing.T) {
 	}
 	start := func() (*Client, func()) {
 		t.Helper()
-		init := exec.Command(binary, "init", "--dir", dir)
-		init.Env = cleanEnv()
-		noWindow(init)
-		if err := init.Run(); err != nil {
-			t.Fatal(err)
-		}
-		cmd := exec.Command(binary, "serve", "--dir", dir, "--config", configPath, "--listen", "127.0.0.1:0")
-		cmd.Env = cleanEnv()
-		noWindow(cmd)
-		pipe, err := cmd.StderrPipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		done := make(chan error, 1)
-		address := make(chan string, 1)
-		go func() {
-			sc := bufio.NewScanner(pipe)
-			for sc.Scan() {
-				fields := strings.Fields(sc.Text())
-				if len(fields) > 3 && strings.HasPrefix(sc.Text(), "Galleton listening on ") {
-					address <- "http://" + fields[3]
-					break
-				}
-			}
-		}()
-		go func() { done <- cmd.Wait() }()
-		t.Cleanup(func() { _ = cmd.Process.Kill() })
-		var base string
-		select {
-		case base = <-address:
-		case <-time.After(10 * time.Second):
-			t.Fatal("daemon did not start")
-		}
-		token, err := os.ReadFile(filepath.Join(dir, "api.token"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		c, err := New(base, string(token))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return c, func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := c.Shutdown(ctx); err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Fatal(err)
-				}
-			case <-ctx.Done():
-				t.Fatal("daemon did not drain")
-			}
-		}
+		return startEngine(t, binary, dir, configPath, cleanEnv())
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	c, stop := start()
-	_, err = c.Connect(ctx, "account", Credentials{Provider: "wallapop", CookieOrigin: provider.URL, CookieHeader: "__Secure-next-auth.session-token=initial-test-credential"})
+	_, err := c.Connect(ctx, "account", Credentials{Provider: "wallapop", CookieOrigin: provider.URL, CookieHeader: "__Secure-next-auth.session-token=initial-test-credential"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,4 +100,252 @@ func TestRealDaemonPersistsRotationAcrossRestart(t *testing.T) {
 	if _, err := c.Status(ctx, "account"); !IsStatus(err, 404) {
 		t.Fatal("session not forgotten", err)
 	}
+}
+
+// The bundled adapter, pointed at a test provider, renews through the proxy
+// named in WALLAPOP_PROXY, treats CloudFront's 403 page as a temporary refusal
+// that keeps the session, and starts no renewal while paused.
+func TestRealDaemonRunsTheBundledAdapterThroughProxyBlocksAndPause(t *testing.T) {
+	requireRealEngine(t)
+	var mu sync.Mutex
+	cookie, calls, blocked := "initial-test-credential", 0, false
+	provider := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if blocked {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, "<html><body><h1>403 ERROR</h1><p>The request could not be satisfied.</p>Generated by cloudfront (CloudFront)</body></html>")
+			return
+		}
+		ck, err := r.Cookie("__Secure-next-auth.session-token")
+		if err != nil || ck.Value != cookie || r.Header.Get("X-DeviceOS") != "0" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		calls++
+		cookie = fmt.Sprintf("rotated-test-credential-%d", calls)
+		http.SetCookie(w, &http.Cookie{Name: ck.Name, Value: cookie, Path: "/", Secure: true, HttpOnly: true, MaxAge: 3600})
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": fmt.Sprintf("test-access-%d", calls)})
+	}))
+	defer provider.Close()
+	proxyURL, tunnels := connectProxy(t)
+	dir, binary := engineDir(t, provider)
+
+	// The bundled adapter with only its origins moved to the test provider.
+	var doc struct {
+		Providers []map[string]any `json:"providers"`
+	}
+	if err := json.Unmarshal(adapterFor(true), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc.Providers[0]["origins"] = []string{provider.URL}
+	doc.Providers[0]["refresh_url"] = provider.URL + "/api/auth/session"
+	cfg, _ := json.Marshal(doc)
+	configPath := filepath.Join(dir, "test-adapters.json")
+	if err := os.WriteFile(configPath, cfg, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, stop := startEngine(t, binary, dir, configPath, hostEnv(proxyURL))
+	defer stop()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	if _, err := c.Connect(ctx, "account", Credentials{Provider: "wallapop", CookieOrigin: provider.URL, CookieHeader: "__Secure-next-auth.session-token=initial-test-credential"}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := c.Headers(ctx, "account", provider.URL)
+	if err != nil || h.Headers["Authorization"] != "Bearer test-access-1" {
+		t.Fatalf("renewal: %+v %v", h, err)
+	}
+	if tunnels.Load() == 0 {
+		t.Fatal("renewal did not go through the proxy")
+	}
+	if p, err := c.provider(ctx); err != nil || !p.Proxied {
+		t.Fatalf("provider %+v %v", p, err)
+	}
+
+	until, err := c.Pause(ctx, 120)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var apiErr *Error
+	if _, err := c.Refresh(ctx, "account"); !errors.As(err, &apiErr) || apiErr.Code != "provider_paused" || !apiErr.RetryAt.Equal(until) {
+		t.Fatalf("refresh while paused: %v", err)
+	}
+	if h, err := c.Headers(ctx, "account", provider.URL); err != nil || h.Headers["Authorization"] != "Bearer test-access-1" {
+		t.Fatalf("a pause must keep serving the held token: %+v %v", h, err)
+	}
+	if _, err := c.sdk.Resume(ctx, ProviderName); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	blocked = true
+	mu.Unlock()
+	if _, err := c.Refresh(ctx, "account"); !errors.As(err, &apiErr) || apiErr.Code != "upstream_blocked" {
+		t.Fatalf("CloudFront page during renewal: %v", err)
+	}
+	meta, err := c.Status(ctx, "account")
+	if err != nil || meta.Status == "reauth_required" {
+		t.Fatalf("a block must keep the session: %+v %v", meta, err)
+	}
+	mu.Lock()
+	blocked = false
+	mu.Unlock()
+	// The kept, unspent cookie still renews once the block lifts. The
+	// engine's own backoff retry may get there first; the provider accepts
+	// only the latest cookie, so any renewal proves the session survived.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		_, err := c.Refresh(ctx, "account")
+		if err == nil {
+			break
+		}
+		if !errors.As(err, &apiErr) || apiErr.Code != "retry_later" || time.Now().After(deadline) {
+			t.Fatalf("renewal after the block: %v", err)
+		}
+		time.Sleep(time.Until(apiErr.RetryAt) + 100*time.Millisecond)
+	}
+	mu.Lock()
+	renewed := calls
+	mu.Unlock()
+	h, err = c.Headers(ctx, "account", provider.URL)
+	if err != nil || renewed < 2 || h.Headers["Authorization"] != fmt.Sprintf("Bearer test-access-%d", renewed) {
+		t.Fatalf("after the block: %d renewals, %+v %v", renewed, h, err)
+	}
+}
+
+func requireRealEngine(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("hermetic SSL_CERT_FILE trust is Linux-only; native lifecycle tests run on every supported OS")
+	}
+	if len(bundle.Binary) == 0 {
+		t.Skip("requires generated bundle")
+	}
+}
+
+// engineDir prepares a private vault directory and makes the engine trust
+// the test provider's certificate, and only that.
+func engineDir(t *testing.T, provider *httptest.Server) (dir, binary string) {
+	t.Helper()
+	dir = filepath.Join(t.TempDir(), "vault")
+	if err := privateDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	binary, err := engineBinary(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := filepath.Join(t.TempDir(), "provider.pem")
+	if err := os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: provider.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", cert)
+	t.Setenv("SSL_CERT_DIR", t.TempDir())
+	return dir, binary
+}
+
+// startEngine runs the engine in the foreground of the test and returns a
+// client plus a function that shuts it down and waits for it to drain.
+func startEngine(t *testing.T, binary, dir, configPath string, env []string) (*Client, func()) {
+	t.Helper()
+	init := exec.Command(binary, "init", "--dir", dir)
+	init.Env = env
+	noWindow(init)
+	if err := init.Run(); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "serve", "--dir", dir, "--config", configPath, "--listen", "127.0.0.1:0")
+	cmd.Env = env
+	noWindow(cmd)
+	pipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	address := make(chan string, 1)
+	go func() {
+		sc := bufio.NewScanner(pipe)
+		for sc.Scan() {
+			fields := strings.Fields(sc.Text())
+			if len(fields) > 3 && strings.HasPrefix(sc.Text(), "Galleton listening on ") {
+				address <- "http://" + fields[3]
+				break
+			}
+		}
+		_, _ = io.Copy(io.Discard, pipe)
+	}()
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	var base string
+	select {
+	case base = <-address:
+	case <-time.After(10 * time.Second):
+		t.Fatal("daemon did not start")
+	}
+	token, err := os.ReadFile(filepath.Join(dir, "api.token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(base, string(token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := c.Shutdown(ctx); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal("daemon did not drain")
+		}
+	}
+}
+
+// connectProxy is an HTTP CONNECT proxy that requires its credentials, so
+// the test also proves they reach the engine through the environment.
+func connectProxy(t *testing.T) (string, *atomic.Int64) {
+	t.Helper()
+	var tunnels atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "CONNECT only", http.StatusMethodNotAllowed)
+			return
+		}
+		if user, pass, ok := (&http.Request{Header: http.Header{"Authorization": r.Header.Values("Proxy-Authorization")}}).BasicAuth(); !ok || user != "renew" || pass != "pr0xy" {
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		upstream, err := net.Dial("tcp", r.Host)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		tunnels.Add(1)
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			upstream.Close()
+			return
+		}
+		_, _ = conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+		go func() {
+			_, _ = io.Copy(upstream, buf)
+			upstream.Close()
+		}()
+		_, _ = io.Copy(conn, upstream)
+		conn.Close()
+	}))
+	t.Cleanup(srv.Close)
+	return "http://renew:pr0xy@" + strings.TrimPrefix(srv.URL, "http://"), &tunnels
 }

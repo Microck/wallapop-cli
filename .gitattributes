@@ -1,0 +1,5 @@
+# The engine adapter is compared byte for byte (and by sha256 for the one
+# older releases installed), so a CRLF checkout must not change it.
+internal/galleton/adapter.json text eol=lf
+internal/galleton/testdata/*.json text eol=lf
+examples/galleton.wallapop.json text eol=lf

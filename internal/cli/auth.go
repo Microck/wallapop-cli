@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,7 +24,7 @@ func (a *App) authCmd() *cobra.Command {
 }
 
 func (a *App) authLoginCmd() *cobra.Command {
-	var cookiesFile string
+	var cookiesFile, cookiesFormat string
 	var cookiesStdin bool
 	cmd := &cobra.Command{
 		Use:   "login",
@@ -33,10 +35,16 @@ Wallapop keeps the durable login in an HttpOnly cookie, so the CLI needs a
 cookie export from a browser where you are logged in:
 
   1. Install a cookie export extension (Cookie-Editor works) and open es.wallapop.com.
-  2. Export cookies as Netscape/text and save the file, or copy the value of
-     the cookie named __Secure-next-auth.session-token.
+  2. Export the cookies, or copy the value of the cookie named
+     __Secure-next-auth.session-token.
   3. Run this command and paste the file path or the value when asked, or pass
      --cookies FILE / --cookies-stdin.
+
+These exports work, and the format is detected (--cookies-format overrides it):
+Netscape cookies.txt, Cookie-Editor or EditThisCookie JSON (an array or a
+{"url", "cookies"} wrapper), a DevTools or Playwright cookie list, a Cookie:
+header or a=b; c=d pairs, or the bare session cookie value. A whole-browser
+export is fine: only wallapop.com cookies are read.
 
 The CLI starts its bundled Galleton session engine automatically. The engine
 renews tokens and stores rotated cookies in its encrypted private vault.
@@ -46,6 +54,7 @@ same way, since the cookie is what the browser holds after any login method.
 Examples:
   wallapop auth login
   wallapop auth login --cookies ~/Downloads/es.wallapop.com_cookies.txt --profile work
+  wallapop auth login --cookies ~/Downloads/cookies.json
   cat cookies.txt | wallapop auth login --cookies-stdin`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -80,7 +89,7 @@ Examples:
 			default:
 				return output.Usagef("no cookies given. Pass --cookies FILE or --cookies-stdin (prompts need a terminal)")
 			}
-			cookie, deviceID, err := wallapop.ParseCookieExport(src)
+			cookie, deviceID, err := wallapop.ParseCookieExport(src, cookiesFormat, a.cookieHosts()...)
 			if err != nil {
 				return output.Usagef("%v. Export cookies from a browser logged in at es.wallapop.com", err)
 			}
@@ -122,10 +131,24 @@ Examples:
 			return a.Printer.Print(authStatus{Profile: a.Profile, LoggedIn: true, Account: me.Name, UserHash: me.Hash, Source: "galleton", GalletonID: a.managedID(), Location: a.Cfg.Profiles[a.Profile].Location})
 		},
 	}
-	cmd.Flags().StringVar(&cookiesFile, "cookies", "", "path to a Netscape cookie export")
+	cmd.Flags().StringVar(&cookiesFile, "cookies", "", "path to a cookie export (cookies.txt, Cookie-Editor JSON, Cookie header)")
 	cmd.Flags().BoolVar(&cookiesStdin, "cookies-stdin", false, "read the cookie export from stdin")
+	cmd.Flags().StringVar(&cookiesFormat, "cookies-format", "auto", "cookie export format: "+strings.Join(wallapop.CookieFormats, ", "))
+	_ = cmd.RegisterFlagCompletionFunc("cookies-format", cobra.FixedCompletions(wallapop.CookieFormats, cobra.ShellCompDirectiveNoFileComp))
 	cmd.MarkFlagsMutuallyExclusive("cookies", "cookies-stdin")
 	return cmd
+}
+
+// cookieHosts are the hosts whose cookies an import reads: Wallapop's web and
+// API hosts, and the configured ones when tests or a mirror override them.
+func (a *App) cookieHosts() []string {
+	var hosts []string
+	for _, base := range []string{wallapop.DefaultWebBase, wallapop.DefaultAPIBase, a.Client.WebBase, a.Client.APIBase} {
+		if u, err := url.Parse(base); err == nil && u.Hostname() != "" && !slices.Contains(hosts, u.Hostname()) {
+			hosts = append(hosts, u.Hostname())
+		}
+	}
+	return hosts
 }
 
 type authStatus struct {

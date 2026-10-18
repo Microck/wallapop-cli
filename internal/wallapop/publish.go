@@ -425,6 +425,7 @@ func (c *Client) writeItem(ctx context.Context, method, path, accept string, pay
 		c.debugf("< %d %s (%d bytes, browser UA)", resp.StatusCode, endpoint, len(raw))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.reportBlock(ctx, resp.StatusCode, raw)
 		return c.statusError(endpoint, resp.StatusCode, raw)
 	}
 	if out != nil && len(bytes.TrimSpace(raw)) > 0 {

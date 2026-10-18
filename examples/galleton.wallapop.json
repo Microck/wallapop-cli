@@ -18,7 +18,12 @@
       "refresh_interval_seconds": 240,
       "refresh_before_seconds": 30,
       "timeout_seconds": 20,
-      "retry_safe": false
+      "retry_safe": false,
+      "block_signatures": [
+        {"status": [403], "body_contains": "The request could not be satisfied"},
+        {"status": [403], "not_json": true}
+      ],
+      "min_interval_ms": 1000
     }
   ]
 }
