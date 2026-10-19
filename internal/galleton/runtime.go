@@ -201,7 +201,7 @@ func running(ctx context.Context, dir, proxy string) (*Client, error) {
 		OK      bool   `json:"ok"`
 		Version string `json:"version"`
 	}
-	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&health) != nil || !health.OK || health.Version != "0.1.0" {
+	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&health) != nil || !health.OK || health.Version != bundle.EngineVersion {
 		return nil, errors.New("session host failed authenticated readiness check")
 	}
 	if ep.Proxy != proxyFingerprint(token, proxy) {
