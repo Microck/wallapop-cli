@@ -102,7 +102,20 @@ wallapop auth service status
 wallapop auth service disable
 ```
 
-Nothing installs a startup service silently. `auth service run` is the foreground
+Nothing installs a startup service silently. After a successful `wallapop auth login` in a
+terminal, the CLI asks:
+
+```text
+keep this login alive in the background? [Y/n]
+```
+
+Enter or `y` runs `wallapop auth service enable`; `n` leaves it off and prints how to turn it
+on later. `--service` and `--no-service` answer without asking (`--service` also works with
+`--no-input`). It is not asked with `--no-input`, in CI, with `WALLAPOP_SESSION_TOKEN`, when
+stdin or stderr is not a terminal, or when the service is already installed.
+
+Without the service, `wallapop auth status` and `wallapop doctor` warn when the session cookie
+from the login expires within 48 hours; the warning does not fail either command. `auth service run` is the foreground
 alternative for your own supervisor. `auth service stop` refuses to stop an engine still
 in use by another client. Renewal cannot override Wallapop expiry, revocation, or a
 requirement to log in again; it cannot run while the computer is off.

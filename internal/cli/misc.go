@@ -167,6 +167,7 @@ func typed(s string) any {
 type doctorCheck struct {
 	Name   string `json:"name"`
 	OK     bool   `json:"ok"`
+	Warn   bool   `json:"warning,omitempty"`
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -181,6 +182,8 @@ func (r doctorReport) Pretty(w io.Writer, color bool) {
 		mark := "ok"
 		if !c.OK {
 			mark = "FAIL"
+		} else if c.Warn {
+			mark = "WARN"
 		}
 		rows = append(rows, []string{mark, c.Name, c.Detail})
 	}
@@ -221,6 +224,7 @@ func (a *App) doctorCmd() *cobra.Command {
 				add("session", err, "")
 			} else {
 				add("session", nil, "mints access tokens")
+				a.noteRenewal(ctx)
 				if _, err := a.Client.ChatToken(ctx); err != nil {
 					add("chat token", err, "")
 				} else {
@@ -230,6 +234,11 @@ func (a *App) doctorCmd() *cobra.Command {
 			if u := a.serviceUnit(); u != nil {
 				state, _ := u.state()
 				add("schedule", nil, state)
+			}
+			if s, ok := a.Creds.Profiles[a.Profile]; ok {
+				if w := a.renewalWarning(s); w != "" {
+					rep.Checks = append(rep.Checks, doctorCheck{Name: "renewal", OK: true, Warn: true, Detail: w})
+				}
 			}
 			if err := a.Printer.Print(rep); err != nil {
 				return err

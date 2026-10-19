@@ -138,6 +138,20 @@ func (s *managedSession) Refresh(ctx context.Context) error {
 	return err
 }
 
+// LastRefresh is the engine's last renewal of the session, zero when none.
+func (s *managedSession) LastRefresh(ctx context.Context) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.initialize(ctx); err != nil {
+		return time.Time{}, managedError(err)
+	}
+	meta, err := s.client.Status(ctx, s.id)
+	if err != nil {
+		return time.Time{}, managedError(err)
+	}
+	return meta.LastRefresh, nil
+}
+
 func managedError(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
