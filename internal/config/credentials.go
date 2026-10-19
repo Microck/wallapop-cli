@@ -23,7 +23,7 @@ func CloneCredentials(in Credentials) Credentials {
 func sameSession(a, b Session) bool {
 	return a.GalletonID == b.GalletonID && a.SessionCookie == b.SessionCookie &&
 		a.DeviceID == b.DeviceID && a.UserHash == b.UserHash && a.Name == b.Name &&
-		a.SessionExpires.Equal(b.SessionExpires) && a.UpdatedAt.Equal(b.UpdatedAt)
+		a.SessionExpires.Equal(b.SessionExpires) && a.SessionIssued.Equal(b.SessionIssued) && a.UpdatedAt.Equal(b.UpdatedAt)
 }
 
 // MergeCredentials preserves unrelated profiles saved by concurrent commands.

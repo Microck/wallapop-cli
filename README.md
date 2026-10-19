@@ -123,7 +123,7 @@ wallapop auth service status
 wallapop auth service disable
 ```
 
-`wallapop auth service run` is the foreground alternative for your own supervisor. the CLI never silently installs an OS startup service. see [session lifecycle and recovery](docs/galleton.md).
+`wallapop auth service run` is the foreground alternative for your own supervisor. the CLI never silently installs an OS startup service: after a successful `wallapop auth login` in a terminal it asks `keep this login alive in the background? [Y/n]`, and yes runs `wallapop auth service enable`. `--service` / `--no-service` answer without asking (`--service` works with `--no-input`); `--no-input`, CI, `WALLAPOP_SESSION_TOKEN` and a non-terminal skip the question. without the service, `wallapop auth status` and `wallapop doctor` warn (without failing) when the imported session cookie expires within 48 hours. see [session lifecycle and recovery](docs/galleton.md).
 
 check session status or verify credentials:
 

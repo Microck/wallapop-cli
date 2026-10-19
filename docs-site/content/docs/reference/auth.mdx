@@ -39,11 +39,17 @@ renews tokens and stores rotated cookies in its encrypted private vault.
 Nothing else from the export is kept. Google, Apple and Facebook accounts work the
 same way, since the cookie is what the browser holds after any login method.
 
+In a terminal, a successful login then asks whether to keep it alive in the
+background, which is the same as running "wallapop auth service enable".
+--service answers yes and --no-service answers no without asking; with
+--no-input, in CI or with WALLAPOP_SESSION_TOKEN it is not asked.
+
 ```bash
 wallapop auth login
 wallapop auth login --cookies ~/Downloads/es.wallapop.com_cookies.txt --profile work
 wallapop auth login --cookies ~/Downloads/cookies.json
 cat cookies.txt | wallapop auth login --cookies-stdin
+wallapop auth login --cookies cookies.txt --no-input --service
 ```
 
 | Flag | Type | Default | Description |
@@ -51,6 +57,8 @@ cat cookies.txt | wallapop auth login --cookies-stdin
 | `--cookies` | string | - | path to a cookie export (cookies.txt, Cookie-Editor JSON, Cookie header) |
 | `--cookies-format` | string | `auto` | cookie export format: auto, netscape, json, header |
 | `--cookies-stdin` | bool | `false` | read the cookie export from stdin |
+| `--no-service` | bool | `false` | do not enable background renewal and do not ask |
+| `--service` | bool | `false` | enable background renewal after the login without asking |
 
 ## `wallapop auth logout`
 

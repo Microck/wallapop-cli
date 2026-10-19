@@ -117,10 +117,15 @@ type Session struct {
 	DeviceID      string `toml:"device_id" json:"device_id"`
 	UserHash      string `toml:"user_hash" json:"user_hash"`
 	Name          string `toml:"name" json:"name"`
-	// SessionExpires is the Expires of the last rotated cookie: the moment the
-	// login lapses unless something mints before then. Zero when unknown.
+	// SessionExpires is the Expires of the imported (or last rotated) session
+	// cookie: the moment the login lapses unless something mints before then.
+	// For a Galleton session it is the imported cookie's. Zero when unknown.
 	SessionExpires time.Time `toml:"session_expires,omitempty" json:"session_expires,omitempty"`
-	UpdatedAt      time.Time `toml:"updated_at" json:"updated_at"`
+	// SessionIssued is when the cookie SessionExpires belongs to was recorded:
+	// the login, then the engine's last renewal seen. Each renewal re-issues
+	// the cookie, assumed to live as long, so SessionExpires moves.
+	SessionIssued time.Time `toml:"session_issued,omitempty" json:"-"`
+	UpdatedAt     time.Time `toml:"updated_at" json:"updated_at"`
 }
 
 type Credentials struct {

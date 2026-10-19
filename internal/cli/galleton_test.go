@@ -132,6 +132,8 @@ func enableGalleton(t *testing.T) *fakeGalleton {
 					return
 				}
 				d.tokens[id] = session.Token
+				meta.LastRefresh = time.Now().UTC()
+				d.sessions[id] = meta
 				for _, cookie := range response.Cookies() {
 					if cookie.Name == "__Secure-next-auth.session-token" {
 						d.cookies[id] = cookie.Name + "=" + cookie.Value
@@ -179,7 +181,8 @@ func TestGalletonLoginStoresOnlyReferenceAndReusesIt(t *testing.T) {
 	h.login()
 	creds := managedCredentials(t, h)
 	s := creds.Profiles["default"]
-	if s.GalletonID == "" || s.SessionCookie != "" || !s.SessionExpires.IsZero() {
+	// session_expires is the imported cookie's expiry, kept for the renewal warning.
+	if s.GalletonID == "" || s.SessionCookie != "" || s.SessionExpires.Unix() != 1791974737 {
 		t.Fatalf("expected managed metadata without a cookie: %+v", s)
 	}
 	raw, err := os.ReadFile(h.credentialsPath())

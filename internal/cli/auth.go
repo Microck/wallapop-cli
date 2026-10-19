@@ -25,7 +25,7 @@ func (a *App) authCmd() *cobra.Command {
 
 func (a *App) authLoginCmd() *cobra.Command {
 	var cookiesFile, cookiesFormat string
-	var cookiesStdin bool
+	var cookiesStdin, withService, noService bool
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Import a browser session for the active profile",
@@ -51,13 +51,22 @@ renews tokens and stores rotated cookies in its encrypted private vault.
 Nothing else from the export is kept. Google, Apple and Facebook accounts work the
 same way, since the cookie is what the browser holds after any login method.
 
+In a terminal, a successful login then asks whether to keep it alive in the
+background, which is the same as running "wallapop auth service enable".
+--service answers yes and --no-service answers no without asking; with
+--no-input, in CI or with WALLAPOP_SESSION_TOKEN it is not asked.
+
 Examples:
   wallapop auth login
   wallapop auth login --cookies ~/Downloads/es.wallapop.com_cookies.txt --profile work
   wallapop auth login --cookies ~/Downloads/cookies.json
-  cat cookies.txt | wallapop auth login --cookies-stdin`,
+  cat cookies.txt | wallapop auth login --cookies-stdin
+  wallapop auth login --cookies cookies.txt --no-input --service`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if withService && noService {
+				return output.Usagef("--service and --no-service are exclusive; pass one")
+			}
 			var src io.Reader
 			switch {
 			case cookiesFile != "":
@@ -89,7 +98,7 @@ Examples:
 			default:
 				return output.Usagef("no cookies given. Pass --cookies FILE or --cookies-stdin (prompts need a terminal)")
 			}
-			cookie, deviceID, err := wallapop.ParseCookieExport(src, cookiesFormat, a.cookieHosts()...)
+			cookie, deviceID, expires, err := wallapop.ParseCookieExport(src, cookiesFormat, a.cookieHosts()...)
 			if err != nil {
 				return output.Usagef("%v. Export cookies from a browser logged in at es.wallapop.com", err)
 			}
@@ -97,14 +106,18 @@ Examples:
 				deviceID = wallapop.NewDeviceID()
 			}
 			// Validate by minting once and reading the profile.
+			// The cookie is recorded as issued before the validating mint, so
+			// the renewal that mint makes moves its expiry (noteRenewal).
+			imported := time.Now().UTC()
 			a.managedLogin(cookie, deviceID)
 			me, err := a.Client.Me(cmd.Context())
 			if err != nil {
 				return err
 			}
+			now := time.Now().UTC()
 			a.Creds.Profiles[a.Profile] = config.Session{
 				GalletonID: a.managedID(), DeviceID: deviceID,
-				UserHash: me.Hash, Name: me.Name, UpdatedAt: time.Now().UTC(),
+				UserHash: me.Hash, Name: me.Name, UpdatedAt: now, SessionIssued: imported, SessionExpires: expires.UTC(),
 			}
 			if err := a.saveCreds(); err != nil {
 				return err
@@ -128,13 +141,27 @@ Examples:
 					return err
 				}
 			}
-			return a.Printer.Print(authStatus{Profile: a.Profile, LoggedIn: true, Account: me.Name, UserHash: me.Hash, Source: "galleton", GalletonID: a.managedID(), Location: a.Cfg.Profiles[a.Profile].Location})
+			want := ""
+			if withService {
+				want = "on"
+			} else if noService {
+				want = "off"
+			}
+			a.noteRenewal(cmd.Context())
+			// The status comes after the renewal choice, so it reflects it.
+			serr := a.offerRenewalService(cmd.Context(), want)
+			if err := a.Printer.Print(a.currentStatus()); err != nil {
+				return err
+			}
+			return serr
 		},
 	}
 	cmd.Flags().StringVar(&cookiesFile, "cookies", "", "path to a cookie export (cookies.txt, Cookie-Editor JSON, Cookie header)")
 	cmd.Flags().BoolVar(&cookiesStdin, "cookies-stdin", false, "read the cookie export from stdin")
 	cmd.Flags().StringVar(&cookiesFormat, "cookies-format", "auto", "cookie export format: "+strings.Join(wallapop.CookieFormats, ", "))
 	_ = cmd.RegisterFlagCompletionFunc("cookies-format", cobra.FixedCompletions(wallapop.CookieFormats, cobra.ShellCompDirectiveNoFileComp))
+	cmd.Flags().BoolVar(&withService, "service", false, "enable background renewal after the login without asking")
+	cmd.Flags().BoolVar(&noService, "no-service", false, "do not enable background renewal and do not ask")
 	cmd.MarkFlagsMutuallyExclusive("cookies", "cookies-stdin")
 	return cmd
 }
@@ -162,6 +189,9 @@ type authStatus struct {
 	SessionExpires *time.Time       `json:"session_expires,omitempty"`
 	Location       *config.Location `json:"location,omitempty"`
 	Valid          *bool            `json:"session_valid,omitempty"`
+	// Warning is set when the session cookie expires within 48 h and no
+	// renewal service runs.
+	Warning string `json:"warning,omitempty"`
 }
 
 func (s authStatus) Pretty(w io.Writer, color bool) {
@@ -181,6 +211,9 @@ func (s authStatus) Pretty(w io.Writer, color bool) {
 		}
 		if s.Valid != nil {
 			rows = append(rows, []string{"valid", fmt.Sprint(*s.Valid)})
+		}
+		if s.Warning != "" {
+			rows = append(rows, []string{"warning", s.Warning})
 		}
 	}
 	if s.Location != nil {
@@ -203,8 +236,14 @@ func (a *App) authStatusCmd() *cobra.Command {
 				valid = new(bool)
 				*valid = err == nil
 			}
+			if valid != nil && *valid {
+				a.noteRenewal(cmd.Context())
+			}
 			st := a.currentStatus()
 			st.Valid = valid
+			if st.Warning != "" {
+				fmt.Fprintln(a.Stderr, "wallapop: warning: "+st.Warning)
+			}
 			return a.Printer.Print(st)
 		},
 	}
@@ -229,7 +268,11 @@ func (a *App) currentStatus() authStatus {
 		st.UpdatedAt, st.SessionExpires = timePtr(s.UpdatedAt), timePtr(s.SessionExpires)
 		if s.GalletonID != "" {
 			st.Source, st.GalletonID = "galleton", s.GalletonID
-			st.SessionExpires = nil // Galleton does not expose the cookie expiry.
+			// Galleton does not expose the cookie's current expiry. The stored
+			// one is the imported cookie's, as of the login: only the
+			// renewal warning uses it.
+			st.SessionExpires = nil
+			st.Warning = a.renewalWarning(s)
 		}
 	}
 	return st
@@ -261,6 +304,7 @@ renewal explicitly with "wallapop auth service enable".`,
 			if err := a.refreshSession(cmd.Context()); err != nil {
 				return err
 			}
+			a.noteRenewal(cmd.Context())
 			return a.Printer.Print(a.currentStatus())
 		},
 	}
@@ -327,7 +371,13 @@ func (a *App) profileCmd() *cobra.Command {
 				def := config.ResolveProfile("", a.Cfg)
 				list := profileList{}
 				for name, s := range a.Creds.Profiles {
-					list = append(list, profileRow{Name: name, Account: s.Name, UserHash: s.UserHash, Default: name == def, UpdatedAt: s.UpdatedAt, SessionExpires: timePtr(s.SessionExpires)})
+					row := profileRow{Name: name, Account: s.Name, UserHash: s.UserHash, Default: name == def, UpdatedAt: s.UpdatedAt, SessionExpires: timePtr(s.SessionExpires)}
+					if s.GalletonID != "" {
+						// As in auth status: the stored expiry is the imported
+						// cookie's, kept for the renewal warning only.
+						row.SessionExpires = nil
+					}
+					list = append(list, row)
 				}
 				sortProfiles(list)
 				return a.Printer.Print(list)

@@ -137,27 +137,28 @@ func jwtExpiry(tok string) time.Time {
 var CookieFormats = []string{cookiefile.Auto, cookiefile.Netscape, cookiefile.JSON, cookiefile.Header}
 
 // ParseCookieExport reads a browser cookie export with Galleton's cookiefile
-// parser and returns the session cookie and device id. format is auto (or
+// parser and returns the session cookie, its expiry (zero when the export
+// does not say) and the device id. format is auto (or
 // empty), netscape (cookies.txt), json (Cookie-Editor or EditThisCookie, as an
 // array or a {"url", "cookies"} wrapper, and DevTools/Playwright lists) or
 // header (`Cookie: a=b; c=d` or `a=b; c=d`). Only cookies for hosts are read,
 // so a whole-browser export works and another site's NextAuth session cookie
 // is never picked up. A bare session token, as copied from the browser, is
 // accepted too.
-func ParseCookieExport(r io.Reader, format string, hosts ...string) (sessionCookie, deviceID string, err error) {
+func ParseCookieExport(r io.Reader, format string, hosts ...string) (sessionCookie, deviceID string, expires time.Time, err error) {
 	data, err := io.ReadAll(io.LimitReader(r, cookiefile.MaxInput+1))
 	if err != nil {
-		return "", "", err
+		return "", "", time.Time{}, err
 	}
 	if format == "" {
 		format = cookiefile.Auto
 	}
 	if token := strings.TrimSpace(string(data)); format == cookiefile.Auto && isBareSessionToken(token) {
-		return token, "", nil
+		return token, "", time.Time{}, nil
 	}
 	cookies, _, err := cookiefile.Parse(data, format, hosts...)
 	if err != nil {
-		return "", "", err
+		return "", "", time.Time{}, err
 	}
 	// The host filter keeps cookies without a domain (a Cookie header, a JSON
 	// entry without one), since nothing says where they belong. When the
@@ -171,15 +172,19 @@ func ParseCookieExport(r io.Reader, format string, hosts ...string) (sessionCook
 		}
 		switch c.Name {
 		case SessionCookieName:
-			sessionCookie = c.Value
+			// The expiry goes with the cookie picked, never another one's.
+			sessionCookie, expires = c.Value, time.Time{}
+			if c.Expires != nil {
+				expires = *c.Expires
+			}
 		case "device_id":
 			deviceID = c.Value
 		}
 	}
 	if sessionCookie == "" {
-		return "", "", errors.New("no " + SessionCookieName + " cookie found in the input")
+		return "", "", time.Time{}, errors.New("no " + SessionCookieName + " cookie found in the input")
 	}
-	return sessionCookie, deviceID, nil
+	return sessionCookie, deviceID, expires, nil
 }
 
 // isBareSessionToken recognizes the session cookie's value on its own: a long

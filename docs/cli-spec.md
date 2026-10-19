@@ -42,7 +42,7 @@ completion <shell>
 
 ### auth
 
-- `auth login [--profile NAME] [--cookies FILE | --cookies-stdin] [--cookies-format auto|netscape|json|header]`
+- `auth login [--profile NAME] [--cookies FILE | --cookies-stdin] [--cookies-format auto|netscape|json|header] [--service | --no-service]`
   Default is the cookie import prompt: it asks for a cookie export or the pasted value of
   `__Secure-next-auth.session-token`. Exports are parsed by Galleton's `cookiefile` package:
   Netscape `cookies.txt`, Cookie-Editor/EditThisCookie JSON (array or `{"url", "cookies"}`
@@ -54,10 +54,26 @@ completion <shell>
   Google, Apple, Facebook) ends in the same browser cookie, so this is the only path.
   Email+password login (`POST /api/v3/access/login`) is not implemented: the flow was not
   verified and cookie import covers every account. Implicitly creates the Profile; the
-  first Profile becomes default.
+  first Profile becomes default. The Session records `session_expires`, the imported
+  cookie's expiry (not exposed by `auth status` for managed sessions; only the renewal
+  warning reads it), and `session_issued`. `session_issued` is the import time, and when the login's own
+  mint, `auth status --check`, `auth refresh` or `doctor` see a later engine renewal
+  (`last_refresh`), the expiry moves to that renewal plus the recorded lifetime, at least 30
+  days, since each mint re-issues the cookie with a fresh 30-day expiry. After a successful login, when stdin and stderr are terminals,
+  `--no-input` is not set, `CI` is not `true`, `WALLAPOP_SESSION_TOKEN` and
+  `WALLAPOP_GALLETON_*` are unset, and the renewal service is not installed yet, it asks on
+  stderr `keep this login alive in the background? [Y/n]`. Yes or an empty line runs the
+  `auth service enable` code path and reports the unit on stderr; end of input counts as no; no prints
+  ``run `wallapop auth service enable` later to turn it on``. `--service` answers yes without
+  asking and always runs the enable again, which retries a half-failed one (works with
+  `--no-input`; a failure is exit 1 with the login kept), `--no-service` answers no; the two
+  are exclusive (exit 2). The status is printed on stdout after the choice.
 - `auth status` shows locally stored profile/account metadata and the session source;
   `--check` obtains a usable token and reports `session_valid`. Managed cookie expiry is
-  omitted because the daemon API does not expose it.
+  omitted because the daemon API does not expose it. When the imported cookie expires within
+  48 h and the renewal service is not installed, it adds a `warning` (also on stderr; never
+  with `WALLAPOP_GALLETON_*` overrides, whose owner runs the engine); the exit code is
+  unchanged.
 - `auth refresh` explicitly requests renewal and prints status. A failed or paused renewal
   fails the command; provider expiry/revocation can require another browser import.
 - `auth logout [--yes]` forgets the daemon session before deleting the local reference.
@@ -65,7 +81,7 @@ completion <shell>
 - `auth service run` keeps renewal in the foreground. `enable` explicitly installs a user
   OS-login service/task, `disable` removes it, `status` inspects without starting it, and
   `stop` drains an idle engine. Active clients prevent shutdown. No service is installed
-  automatically. `status` also reports, from a running engine, `proxied`,
+  without consent: only `enable`, or a yes to the login prompt or `--service`. `status` also reports, from a running engine, `proxied`,
   `paused_until`, and `proxy_mismatch` when it runs with another proxy setting.
 
 Session mechanics: a pinned Galleton v0.1.1 executable is included in release binaries and
@@ -440,8 +456,9 @@ and leave the previous config unchanged.
   the scheme (`http`, `https`, `socks5`, `socks5h`), host and port, and refuses credentials
   because the file is world-readable; a rejected value is exit 2 and leaves the file untouched.
 - `doctor` checks: config parses, proxy in use (without credentials), Session mints,
-  `api.wallapop.com` reachable, PubNub token obtainable, service unit state. Exit 1 if any
-  check fails.
+  `api.wallapop.com` reachable, PubNub token obtainable, service unit state, and a `renewal`
+  line marked as a warning (`"warning": true`, still `ok`) when the imported session cookie
+  expires within 48 h and the renewal service is not installed. Exit 1 if any check fails.
 - `skills list | get NAME` prints the embedded agent-facing docs (usage, output shapes).
 - `completion bash|zsh|fish|powershell` (cobra).
 
