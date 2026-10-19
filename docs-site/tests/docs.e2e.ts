@@ -8,7 +8,8 @@ function pages(directory = root): { route: string; title: string }[] {
   const path = join(directory, entry.name);
   if (entry.isDirectory()) return pages(path);
   if (!entry.name.endsWith(".mdx")) return [];
-  const title = readFileSync(path, "utf8").match(/^title:\s*(.+)$/m)?.[1]?.replace(/^"|"$/g, "");
+  const frontmatter = readFileSync(path, "utf8").match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+  const title = frontmatter.match(/^title:\s*(.+?)\s*$/m)?.[1]?.replace(/^(['"])(.*)\1$/, "$2");
   if (!title) throw new Error(`Missing title: ${path}`);
   const route = "/docs/" + relative(root, path).split(sep).join("/").replace(/\.mdx$/, "").replace(/(^|\/)index$/, "");
   return [{ route, title }];
