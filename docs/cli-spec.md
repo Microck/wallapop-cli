@@ -68,7 +68,7 @@ completion <shell>
   automatically. `status` also reports, from a running engine, `proxied`,
   `paused_until`, and `proxy_mismatch` when it runs with another proxy setting.
 
-Session mechanics: a pinned Galleton v0.1.0 executable is included in release binaries and
+Session mechanics: a pinned Galleton v0.1.1 executable is included in release binaries and
 managed by the CLI. It renews through the existing `GET /api/auth/session` endpoint, extracts
 `/token`, requires a replacement cookie, and persists rotated credentials in its encrypted
 vault. The provider adapter's interval is 240 seconds, not a promise about token lifetime.

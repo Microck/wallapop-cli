@@ -160,7 +160,7 @@ always imports the supplied cookie into managed storage.
 
 ## Upgrading from v0.3.x
 
-Releases up to v0.3.2 pinned a Galleton development build. This one pins
+Releases up to v0.3.2 pinned a Galleton development build. v0.4.0 pins
 Galleton v0.1.0 and adds `block_signatures`, `min_interval_ms` and, with a
 proxy, `proxy_env` to the bundled adapter. Galleton leaves those fields out of
 the configuration hash it checks imported sessions against, so existing
@@ -168,6 +168,10 @@ sessions keep working without a new login. The first command after the upgrade
 replaces the adapter the old release installed; an adapter edited by hand still
 stops the engine from starting. A running engine of the old version is refused
 until it exits, as before.
+
+v0.4.1 pins Galleton v0.1.1 (block signatures may match a 2xx challenge body,
+and `serve --pause`). The adapter and its configuration hash are unchanged, so
+sessions carry over; a running v0.1.0 engine is refused until it exits.
 
 ## Provider limits and verification
 
