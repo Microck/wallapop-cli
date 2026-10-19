@@ -41,6 +41,9 @@ func newHarness(t *testing.T) *harness {
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
 	t.Setenv("HOME", home)
+	// Keep MCP installation tests inside the disposable home even when the
+	// developer runs the suite from a configured Codex environment.
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("WALLAPOP_PROFILE", "")
 	t.Setenv("WALLAPOP_SESSION_TOKEN", "")
 	t.Setenv("WALLAPOP_CONFIG", "")
@@ -1539,5 +1542,20 @@ func TestDebugStepsPreservesJSONNumbers(t *testing.T) {
 		if strings.TrimSpace(r.stdout) != payload {
 			t.Fatalf("payload changed: %s", r.stdout)
 		}
+	}
+}
+
+func TestSearchWatchDeduplicatesRepeatedItemsWithinCheck(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.AddItem(bike("hashllllllll", 100))
+	h.fake.SearchOrder = []string{"hashllllllll", "hashllllllll"}
+	r := h.must("", "watch", "add", "search", "bici", "--name", "duplicates", "--emit-initial", "--format", "jsonl")
+	if strings.Count(r.stdout, `"item.new"`) != 1 {
+		t.Fatalf("duplicate events: %s", r.stdout)
+	}
+	r = h.must("", "watch", "check", "duplicates")
+	if strings.TrimSpace(r.stdout) != "[]" {
+		t.Fatalf("second check should be silent: %s", r.stdout)
 	}
 }

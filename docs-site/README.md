@@ -39,3 +39,11 @@ Brand scale `--brand-50` through `--brand-950` with logo `#14C1AD` at 500. Light
 mode is mint (`#F7FCFB` page, `#FFFFFF` cards, `#10201E` text, `#0E9E8E` primary).
 Dark mode is deep green (`#071411` page, `#0C1F1B` cards, `#EAFBF8` text,
 `#14C1AD` primary, `#74E1D5` focus ring).
+
+## Browser flow checks
+
+Run `npm ci`, `npm run build`, `npx e2e-web install chromium`, and
+`npm run test:e2e`. The pinned tester-army/e2e suite opens every MDX route
+and checks its heading, home navigation, static search index and mobile overflow.
+It makes no AI calls and uses no account credentials. This documentation suite
+does not replace the Go CLI integration tests or prove live marketplace acceptance.
