@@ -107,6 +107,9 @@ func diffKnown(w store.Watch, prev store.Seen, it wallapop.Item, trustSold bool)
 
 func checkSearch(ctx context.Context, c *wallapop.Client, w store.Watch, t SearchTarget, seen map[string]store.Seen, baseline bool) (Result, error) {
 	var res Result
+	// Pages may overlap while the marketplace reorders results. The first
+	// occurrence owns this check: emit and persist each item only once.
+	visited := make(map[string]bool)
 	pages := w.Pages
 	if pages < 1 {
 		pages = 1
@@ -118,6 +121,10 @@ func checkSearch(ctx context.Context, c *wallapop.Client, w store.Watch, t Searc
 			return Result{}, err
 		}
 		for _, it := range sp.Items {
+			if visited[it.Hash] {
+				continue
+			}
+			visited[it.Hash] = true
 			prev, known := seen[it.Hash]
 			switch {
 			case !known && !baseline:
