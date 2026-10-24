@@ -48,6 +48,7 @@ Output: `{"items":[{hash,title,price,currency,reserved,sold,shippable,location,u
 wallapop item show HASH_OR_URL
 wallapop item favorite HASH | unfavorite HASH
 wallapop item reserve HASH [--off] | sold HASH --yes | delete HASH --yes   # own items
+wallapop item reactivate HASH_OR_URL                       # relist an own expired item
 wallapop user show USER | items USER | reviews USER        # hash, profile URL or slug
 wallapop me show | items [--sold] | favorites
 ```
@@ -93,7 +94,7 @@ Install writes the server entry into `~/.claude.json`, `~/.codex/config.toml` or
 
 Tools: `search`, `item_show`, `user_show`, `watch_check`. Arguments are the command's flags with dashes as underscores (`max_price`, `no_mark_read`, `next_page` for `--next`); `condition` takes an array, `filter` an object.
 
-Not tools, on purpose: `item reserve`, `item sold`, `item delete`, `item create`, `item edit`. Destructive and seller actions stay with the person at the terminal; asking for them returns a refusal that says so. The chat tools (`chat_list`, `chat_show`, `chat_send`, `chat_start`) are written but withheld until live message receive is verified.
+Not tools, on purpose: `item reserve`, `item reactivate`, `item sold`, `item delete`, `item create`, `item edit`. Destructive and seller actions stay with the person at the terminal; asking for them returns a refusal that says so. The chat tools (`chat_list`, `chat_show`, `chat_send`, `chat_start`) are written but withheld until live message receive is verified.
 
 ## Config
 

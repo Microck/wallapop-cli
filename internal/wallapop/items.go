@@ -53,7 +53,7 @@ func (c *Client) Item(ctx context.Context, ref string) (Item, error) {
 		return mergeItem(page, detail), nil
 	}
 	if !IsHash(ref) {
-		return Item{}, Usage("%q is not an item hash or item URL. Pass the 12-character hash or the full es.wallapop.com/item/... link", ref)
+		return Item{}, badItemRef(ref)
 	}
 	detail, err := c.itemFromAPI(ctx, ref)
 	if err != nil {
@@ -97,6 +97,30 @@ func mergeItem(page, detail Item) Item {
 	// `item edit` has to resend it or the write clears it.
 	page.Attributes = detail.Attributes
 	return page
+}
+
+func badItemRef(ref string) *Error {
+	return Usage("%q is not an item hash or item URL. Pass the 12-character hash or the full es.wallapop.com/item/... link", ref)
+}
+
+// MyItem finds one of the account's own unsold listings by hash or item URL
+// without touching the public detail, which 404s while a listing is expired.
+// A listing not in that list is a usage error, like a foreign one elsewhere.
+func (c *Client) MyItem(ctx context.Context, ref string) (Item, error) {
+	slug, isURL := itemSlugFromRef(ref)
+	if !isURL && !IsHash(ref) {
+		return Item{}, badItemRef(ref)
+	}
+	mine, err := c.MyItems(ctx, false)
+	if err != nil {
+		return Item{}, err
+	}
+	for _, it := range mine {
+		if it.Hash == ref || (isURL && pathTail(it.URL) == slug) {
+			return it, nil
+		}
+	}
+	return Item{}, Usage("%s is not one of your listings (see `wallapop me items`)", ref)
 }
 
 // ResolveItemHash turns any accepted item reference into its hash.
@@ -368,6 +392,14 @@ func ownWriteError(err error) error {
 	return err
 }
 
+// ReactivateItem relists one of the account's own expired items. Mirrors the
+// web catalog's "Reactivar" (PUT .../reactivate with an empty object). An
+// expired item 404s on the public detail endpoint until this succeeds.
+func (c *Client) ReactivateItem(ctx context.Context, hash string) error {
+	_, err := c.do(ctx, request{method: http.MethodPut, base: c.APIBase, path: "/api/v3/items/" + hash + "/reactivate", body: map[string]any{}, auth: true}, nil)
+	return ownWriteError(err)
+}
+
 // MarkSold marks one of the account's own items as sold. Irreversible on Wallapop.
 func (c *Client) MarkSold(ctx context.Context, hash string) error {
 	_, err := c.do(ctx, request{method: http.MethodPut, base: c.APIBase, path: "/api/v3/items/" + hash + "/sold", auth: true}, nil)
@@ -397,6 +429,7 @@ type userItemsResponse struct {
 		} `json:"shipping"`
 		Reserved flag   `json:"reserved"`
 		Sold     flag   `json:"sold"`
+		Expired  flag   `json:"expired"`
 		UserID   string `json:"user_id"`
 	} `json:"data"`
 	Meta struct {
@@ -424,6 +457,7 @@ func (c *Client) userItems(ctx context.Context, path string, auth bool, sellerHa
 			SellerHash:  firstNonEmpty(d.UserID, sellerHash),
 			Reserved:    d.Reserved.Flag,
 			Sold:        d.Sold.Flag,
+			Expired:     d.Expired.Flag,
 			Shippable:   d.Shipping.ItemIsShippable,
 			Images:      d.Images.bigURLs(),
 			URL:         c.itemURL(d.Slug),

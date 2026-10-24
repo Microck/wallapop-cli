@@ -133,6 +133,7 @@ Examples:
 		a.favoriteCmd("favorite", "Add the listing to your favorites", true),
 		a.favoriteCmd("unfavorite", "Remove the listing from your favorites", false),
 		a.reserveCmd(),
+		a.reactivateCmd(),
 		a.destructiveItemCmd("sold", "sold", "Mark one of your own listings as sold", "Mark %s as sold? This cannot be undone on Wallapop.",
 			// Closures, not method values: a.Client is built in setup, after this runs.
 			func(ctx context.Context, hash string) error { return a.Client.MarkSold(ctx, hash) }),
@@ -195,6 +196,31 @@ func (a *App) reserveCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&off, "off", false, "clear the reserved flag")
 	return cmd
+}
+
+// reactivateCmd relists an expired listing. ownedItemHash reads the public
+// detail, which 404s while a listing is expired, so ownership comes from the
+// account's own list instead.
+func (a *App) reactivateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: "reactivate ITEM", Short: "Relist one of your own expired listings", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.requireSession(); err != nil {
+				return err
+			}
+			it, err := a.Client.MyItem(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if !it.Expired {
+				return a.Printer.Print(actionResult{Action: "already active", Item: it.Hash, OK: true})
+			}
+			if err := a.Client.ReactivateItem(cmd.Context(), it.Hash); err != nil {
+				return err
+			}
+			return a.Printer.Print(actionResult{Action: "reactivated", Item: it.Hash, OK: true})
+		},
+	}
 }
 
 // ownedItemHash resolves ITEM and refuses it unless the active account listed
