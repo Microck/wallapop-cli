@@ -123,9 +123,11 @@ type Server struct {
 	// NewItemPageLags makes a created listing's rendered page 404 while its
 	// API detail already answers, the propagation window Wallapop really has.
 	NewItemPageLags bool
-	Uploads         map[string]int // pictures received per upload id
-	WebhookStatus   int            // status for POST /hook (0 = 200)
-	Hooks           []json.RawMessage
+	// UserItemsPageSize pages /user/items via meta.next and ?since= (zero: one page).
+	UserItemsPageSize int
+	Uploads           map[string]int // pictures received per upload id
+	WebhookStatus     int            // status for POST /hook (0 = 200)
+	Hooks             []json.RawMessage
 }
 
 func New() *Server {
@@ -257,7 +259,17 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		if data == nil {
 			data = []map[string]any{}
 		}
-		writeJSON(w, 200, map[string]any{"data": data, "meta": map[string]any{}})
+		meta := map[string]any{}
+		if n := s.UserItemsPageSize; n > 0 && p != "/api/v3/user/items/favorited" {
+			start, _ := strconv.Atoi(r.URL.Query().Get("since"))
+			start = min(start, len(data))
+			end := min(start+n, len(data))
+			if end < len(data) {
+				meta["next"] = strconv.Itoa(end)
+			}
+			data = data[start:end]
+		}
+		writeJSON(w, 200, map[string]any{"data": data, "meta": meta})
 	case p == "/api/v3/items" && r.Method == http.MethodPost:
 		s.createItem(w, r)
 	case p == "/api/v3/items/upload/components":

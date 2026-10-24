@@ -105,22 +105,43 @@ func badItemRef(ref string) *Error {
 
 // MyItem finds one of the account's own unsold listings by hash or item URL
 // without touching the public detail, which 404s while a listing is expired.
+// URLs match on the slug or its trailing numeric id (Wallapop's URL alias).
 // A listing not in that list is a usage error, like a foreign one elsewhere.
 func (c *Client) MyItem(ctx context.Context, ref string) (Item, error) {
 	slug, isURL := itemSlugFromRef(ref)
 	if !isURL && !IsHash(ref) {
 		return Item{}, badItemRef(ref)
 	}
-	mine, err := c.MyItems(ctx, false)
-	if err != nil {
-		return Item{}, err
-	}
-	for _, it := range mine {
-		if it.Hash == ref || (isURL && pathTail(it.URL) == slug) {
-			return it, nil
+	next := ""
+	for page := 0; page < maxOwnItemPages; page++ {
+		mine, cursor, err := c.userItemsPage(ctx, "/api/v3/user/items", next, true, "")
+		if err != nil {
+			return Item{}, err
 		}
+		for _, it := range mine {
+			if it.Hash == ref || (isURL && slugMatches(pathTail(it.URL), slug)) {
+				return it, nil
+			}
+		}
+		if cursor == "" || cursor == next {
+			break
+		}
+		next = cursor
 	}
 	return Item{}, Usage("%s is not one of your listings (see `wallapop me items`)", ref)
+}
+
+// maxOwnItemPages bounds the walk through /user/items (40 per page).
+const maxOwnItemPages = 50
+
+// slugMatches compares a canonical slug ("old-thing-123") with a reference
+// that is either that slug or its trailing numeric id ("123").
+func slugMatches(canonical, ref string) bool {
+	if canonical == ref {
+		return true
+	}
+	i := strings.LastIndex(canonical, "-")
+	return i >= 0 && canonical[i+1:] == ref
 }
 
 // ResolveItemHash turns any accepted item reference into its hash.
@@ -438,9 +459,20 @@ type userItemsResponse struct {
 }
 
 func (c *Client) userItems(ctx context.Context, path string, auth bool, sellerHash string) ([]Item, error) {
+	items, _, err := c.userItemsPage(ctx, path, "", auth, sellerHash)
+	return items, err
+}
+
+// userItemsPage reads one page; next is meta.next, passed back as ?since=
+// for the following page (the web's cursor, 40 items per page).
+func (c *Client) userItemsPage(ctx context.Context, path, since string, auth bool, sellerHash string) (items []Item, next string, err error) {
+	var q url.Values
+	if since != "" {
+		q = url.Values{"since": {since}}
+	}
 	var raw userItemsResponse
-	if err := c.getJSON(ctx, path, nil, auth, &raw); err != nil {
-		return nil, err
+	if err := c.getJSON(ctx, path, q, auth, &raw); err != nil {
+		return nil, "", err
 	}
 	out := make([]Item, 0, len(raw.Data))
 	for _, d := range raw.Data {
@@ -463,7 +495,7 @@ func (c *Client) userItems(ctx context.Context, path string, auth bool, sellerHa
 			URL:         c.itemURL(d.Slug),
 		})
 	}
-	return out, nil
+	return out, raw.Meta.Next, nil
 }
 
 // MyItems lists the account's active (or sold) listings.

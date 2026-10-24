@@ -1218,6 +1218,20 @@ func TestItemReactivateRelistsExpiredOwnItem(t *testing.T) {
 	}
 }
 
+func TestItemReactivateFindsListingOnLaterPageByNumericURL(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.UserItemsPageSize = 1
+	h.fake.AddItem(fakewallapop.Item{Hash: "hashactive00", Slug: "active-thing-111", Title: "Active", Price: 5, Seller: fakewallapop.UserHash})
+	mine := h.fake.AddItem(fakewallapop.Item{Hash: "hashexpired1", Slug: "old-thing-222", Title: "Old", Price: 5, Seller: fakewallapop.UserHash, Expired: true})
+	r := h.must("", "item", "reactivate", h.fake.URL+"/item/222")
+	var got struct{ Action, Item string }
+	decode(t, r.stdout, &got)
+	if got.Action != "reactivated" || got.Item != mine.Hash {
+		t.Fatalf("expected reactivated %s, got %s", mine.Hash, r.stdout)
+	}
+}
+
 func testPNG(t *testing.T, path string) {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
