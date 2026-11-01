@@ -187,7 +187,7 @@ eligible interactive commands check for a new stable release at most once a day 
 | `category list` | category ids |
 | `alert list` | your saved searches on wallapop; `watch add search --from-alert ID --name NAME` turns one into a watch |
 | `item show / images / open / favorite / unfavorite` | inspect a listing by hash or url |
-| `item reserve / sold / delete` | act on your own listings (`sold`, `delete` ask or need `--yes`) |
+| `item reserve / reactivate / sold / delete` | act on your own listings (`reactivate` relists an expired one; `sold`, `delete` ask or need `--yes`) |
 | `user show / items / reviews` | look at a seller by hash, url or slug |
 | `me show / items / favorites` | your account |
 | `chat list / show / send / start / open / archive` | messaging; `open` is a live line-mode chat |

@@ -1187,6 +1187,51 @@ func TestSellerActionsOnAnotherSellersItemFailBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestItemReactivateRelistsExpiredOwnItem(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	mine := h.fake.AddItem(fakewallapop.Item{Hash: "hashexpired0", Slug: "old-thing-123", Title: "Old", Price: 5, Seller: fakewallapop.UserHash, Expired: true})
+	if r := h.run("", "item", "show", mine.Hash); r.code != 4 {
+		t.Fatalf("an expired item should not resolve publicly before reactivation, got exit %d", r.code)
+	}
+	r := h.must("", "item", "reactivate", h.fake.URL+"/item/"+mine.Slug+"?utm_source=test")
+	var got struct{ Action, Item string }
+	decode(t, r.stdout, &got)
+	if got.Action != "reactivated" || got.Item != mine.Hash {
+		t.Fatalf("expected reactivated %s, got %s", mine.Hash, r.stdout)
+	}
+	h.must("", "item", "show", mine.Hash)
+	if r := h.must("", "item", "reactivate", mine.Hash); !strings.Contains(r.stdout, "already active") {
+		t.Fatalf("second reactivate should be a no-op, got %s", r.stdout)
+	}
+	if n := len(h.fake.RequestsUnder("/api/v3/items/" + mine.Hash + "/reactivate")); n != 1 {
+		t.Fatalf("expected one reactivate write, saw %d", n)
+	}
+	theirs := h.fake.AddItem(fakewallapop.Item{Hash: "hashtheirs01", Title: "Theirs", Price: 5, Seller: fakewallapop.OtherHash, Expired: true})
+	if r := h.run("", "item", "reactivate", theirs.Hash); r.code != 2 || !strings.Contains(r.stderr, "not one of your listings") {
+		t.Fatalf("reactivating someone else's item must be a usage error, got exit %d stderr %q", r.code, r.stderr)
+	}
+	for _, rq := range h.fake.RequestsUnder("/api/v3/items/" + theirs.Hash) {
+		if rq.Method != "GET" {
+			t.Fatalf("no write may reach wallapop for someone else's item, saw %s %s", rq.Method, rq.Path)
+		}
+	}
+}
+
+func TestItemReactivateFindsListingOnLaterPageByNumericURL(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.UserItemsPageSize = 1
+	h.fake.AddItem(fakewallapop.Item{Hash: "hashactive00", Slug: "active-thing-111", Title: "Active", Price: 5, Seller: fakewallapop.UserHash})
+	mine := h.fake.AddItem(fakewallapop.Item{Hash: "hashexpired1", Slug: "old-thing-222", Title: "Old", Price: 5, Seller: fakewallapop.UserHash, Expired: true})
+	r := h.must("", "item", "reactivate", h.fake.URL+"/item/222")
+	var got struct{ Action, Item string }
+	decode(t, r.stdout, &got)
+	if got.Action != "reactivated" || got.Item != mine.Hash {
+		t.Fatalf("expected reactivated %s, got %s", mine.Hash, r.stdout)
+	}
+}
+
 func testPNG(t *testing.T, path string) {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
@@ -1557,5 +1602,24 @@ func TestSearchWatchDeduplicatesRepeatedItemsWithinCheck(t *testing.T) {
 	r = h.must("", "watch", "check", "duplicates")
 	if strings.TrimSpace(r.stdout) != "[]" {
 		t.Fatalf("second check should be silent: %s", r.stdout)
+	}
+}
+
+func TestItemReactivateReportsIncompleteOwnershipLookup(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.UserItemsPageSize = 1
+	for i := 0; i < 51; i++ {
+		h.fake.AddItem(fakewallapop.Item{Hash: fmt.Sprintf("%012d", i), Title: "Expired", Seller: fakewallapop.UserHash, Expired: true})
+	}
+	r := h.run("", "item", "reactivate", "000000000050")
+	if r.code != 2 || !strings.Contains(r.stderr, "first 50 pages") {
+		t.Fatalf("expected an explicit lookup cap, got exit %d stderr %q", r.code, r.stderr)
+	}
+	if n := len(h.fake.RequestsUnder("/api/v3/user/items")); n != 50 {
+		t.Fatalf("expected bounded lookup of 50 pages, saw %d", n)
+	}
+	if n := len(h.fake.RequestsUnder("/api/v3/items/000000000050/reactivate")); n != 0 {
+		t.Fatalf("incomplete ownership lookup must not write, saw %d requests", n)
 	}
 }

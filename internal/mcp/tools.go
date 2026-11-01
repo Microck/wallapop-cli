@@ -54,6 +54,7 @@ var withheld = []struct{ name, why string }{
 	{"item_sold", "marking a listing sold is irreversible on Wallapop; run `wallapop item sold` yourself"},
 	{"item_delete", "deleting a listing is irreversible on Wallapop; run `wallapop item delete` yourself"},
 	{"item_reserve", "reserving a listing changes what buyers see; run `wallapop item reserve` yourself"},
+	{"item_reactivate", "relisting an expired listing changes what buyers see; run `wallapop item reactivate` yourself"},
 	{"item_create", "publishing a listing is a seller action; run `wallapop item create` yourself"},
 	{"item_edit", "editing a listing is a seller action; run `wallapop item edit` yourself"},
 }

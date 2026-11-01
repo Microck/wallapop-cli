@@ -47,7 +47,10 @@ type Item struct {
 	Seller     string
 	Reserved   bool
 	Sold       bool
-	Removed    bool // page 404s, API detail 404s
+	// Expired models a lapsed listing: listed under /user/items with
+	// expired.flag, while the public detail and page 404 until reactivated.
+	Expired bool
+	Removed bool // page 404s, API detail 404s
 	// PageMissing models the window after a create where the API detail
 	// answers but the rendered page has not propagated yet.
 	PageMissing bool
@@ -120,9 +123,11 @@ type Server struct {
 	// NewItemPageLags makes a created listing's rendered page 404 while its
 	// API detail already answers, the propagation window Wallapop really has.
 	NewItemPageLags bool
-	Uploads         map[string]int // pictures received per upload id
-	WebhookStatus   int            // status for POST /hook (0 = 200)
-	Hooks           []json.RawMessage
+	// UserItemsPageSize pages /user/items via meta.next and ?since= (zero: one page).
+	UserItemsPageSize int
+	Uploads           map[string]int // pictures received per upload id
+	WebhookStatus     int            // status for POST /hook (0 = 200)
+	Hooks             []json.RawMessage
 }
 
 func New() *Server {
@@ -254,7 +259,17 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		if data == nil {
 			data = []map[string]any{}
 		}
-		writeJSON(w, 200, map[string]any{"data": data, "meta": map[string]any{}})
+		meta := map[string]any{}
+		if n := s.UserItemsPageSize; n > 0 && p != "/api/v3/user/items/favorited" {
+			start, _ := strconv.Atoi(r.URL.Query().Get("since"))
+			start = min(max(start, 0), len(data))
+			end := min(start+n, len(data))
+			if end < len(data) {
+				meta["next"] = strconv.Itoa(end)
+			}
+			data = data[start:end]
+		}
+		writeJSON(w, 200, map[string]any{"data": data, "meta": meta})
 	case p == "/api/v3/items" && r.Method == http.MethodPost:
 		s.createItem(w, r)
 	case p == "/api/v3/items/upload/components":
@@ -428,6 +443,7 @@ func (s *Server) userItemJSON(it *Item) map[string]any {
 		"price":    map[string]any{"amount": it.Price, "currency": "EUR"},
 		"shipping": map[string]bool{"item_is_shippable": true},
 		"reserved": map[string]bool{"flag": it.Reserved}, "sold": map[string]bool{"flag": it.Sold},
+		"expired": map[string]bool{"flag": it.Expired},
 	}
 }
 
@@ -533,11 +549,19 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 	it, ok := s.Items[hash]
 	malformed := s.MalformedItem
 	s.mu.Unlock()
-	if !ok || (it.Removed && action == "") {
+	if !ok || ((it.Removed || it.Expired) && action == "") {
 		writeJSON(w, 404, map[string]any{"code": 404, "message": "item not found"})
 		return
 	}
 	switch {
+	case action == "reactivate" && r.Method == http.MethodPut:
+		if !s.authed(w, r) || !s.owned(w, it, 401) {
+			return
+		}
+		s.mu.Lock()
+		it.Expired = false
+		s.mu.Unlock()
+		w.WriteHeader(204)
 	case action == "" && r.Method == http.MethodGet:
 		if malformed {
 			w.WriteHeader(200)
@@ -644,7 +668,7 @@ func (s *Server) itemPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.mu.Unlock()
-	if it == nil || it.Removed || it.PageMissing {
+	if it == nil || it.Removed || it.Expired || it.PageMissing {
 		w.WriteHeader(404)
 		fmt.Fprint(w, "<html>gone</html>")
 		return

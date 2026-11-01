@@ -53,7 +53,7 @@ func (c *Client) Item(ctx context.Context, ref string) (Item, error) {
 		return mergeItem(page, detail), nil
 	}
 	if !IsHash(ref) {
-		return Item{}, Usage("%q is not an item hash or item URL. Pass the 12-character hash or the full es.wallapop.com/item/... link", ref)
+		return Item{}, badItemRef(ref)
 	}
 	detail, err := c.itemFromAPI(ctx, ref)
 	if err != nil {
@@ -97,6 +97,56 @@ func mergeItem(page, detail Item) Item {
 	// `item edit` has to resend it or the write clears it.
 	page.Attributes = detail.Attributes
 	return page
+}
+
+func badItemRef(ref string) *Error {
+	return Usage("%q is not an item hash or item URL. Pass the 12-character hash or the full es.wallapop.com/item/... link", ref)
+}
+
+// MyItem finds one of the account's own unsold listings by hash or item URL
+// without touching the public detail, which 404s while a listing is expired.
+// URLs match on the slug or its trailing numeric id (Wallapop's URL alias).
+// A listing not in that list is a usage error, like a foreign one elsewhere.
+func (c *Client) MyItem(ctx context.Context, ref string) (Item, error) {
+	slug, isURL := itemSlugFromRef(ref)
+	if !isURL && !IsHash(ref) {
+		return Item{}, badItemRef(ref)
+	}
+	next := ""
+	more := false
+	for page := 0; page < maxOwnItemPages; page++ {
+		mine, cursor, err := c.userItemsPage(ctx, "/api/v3/user/items", next, true, "")
+		if err != nil {
+			return Item{}, err
+		}
+		for _, it := range mine {
+			if it.Hash == ref || (isURL && slugMatches(pathTail(it.URL), slug)) {
+				return it, nil
+			}
+		}
+		more = cursor != "" && cursor != next
+		if !more {
+			break
+		}
+		next = cursor
+	}
+	if more {
+		return Item{}, Usage("%s was not found in the first %d pages of your listings", ref, maxOwnItemPages)
+	}
+	return Item{}, Usage("%s is not one of your listings (see `wallapop me items`)", ref)
+}
+
+// maxOwnItemPages bounds the walk through /user/items (40 per page).
+const maxOwnItemPages = 50
+
+// slugMatches compares a canonical slug ("old-thing-123") with a reference
+// that is either that slug or its trailing numeric id ("123").
+func slugMatches(canonical, ref string) bool {
+	if canonical == ref {
+		return true
+	}
+	i := strings.LastIndex(canonical, "-")
+	return i >= 0 && canonical[i+1:] == ref
 }
 
 // ResolveItemHash turns any accepted item reference into its hash.
@@ -368,6 +418,14 @@ func ownWriteError(err error) error {
 	return err
 }
 
+// ReactivateItem relists one of the account's own expired items. Mirrors the
+// web catalog's "Reactivar" (PUT .../reactivate with an empty object). An
+// expired item 404s on the public detail endpoint until this succeeds.
+func (c *Client) ReactivateItem(ctx context.Context, hash string) error {
+	_, err := c.do(ctx, request{method: http.MethodPut, base: c.APIBase, path: "/api/v3/items/" + hash + "/reactivate", body: map[string]any{}, auth: true}, nil)
+	return ownWriteError(err)
+}
+
 // MarkSold marks one of the account's own items as sold. Irreversible on Wallapop.
 func (c *Client) MarkSold(ctx context.Context, hash string) error {
 	_, err := c.do(ctx, request{method: http.MethodPut, base: c.APIBase, path: "/api/v3/items/" + hash + "/sold", auth: true}, nil)
@@ -397,6 +455,7 @@ type userItemsResponse struct {
 		} `json:"shipping"`
 		Reserved flag   `json:"reserved"`
 		Sold     flag   `json:"sold"`
+		Expired  flag   `json:"expired"`
 		UserID   string `json:"user_id"`
 	} `json:"data"`
 	Meta struct {
@@ -405,9 +464,20 @@ type userItemsResponse struct {
 }
 
 func (c *Client) userItems(ctx context.Context, path string, auth bool, sellerHash string) ([]Item, error) {
+	items, _, err := c.userItemsPage(ctx, path, "", auth, sellerHash)
+	return items, err
+}
+
+// userItemsPage reads one page; next is meta.next, passed back as ?since=
+// for the following page (the web's cursor, 40 items per page).
+func (c *Client) userItemsPage(ctx context.Context, path, since string, auth bool, sellerHash string) (items []Item, next string, err error) {
+	var q url.Values
+	if since != "" {
+		q = url.Values{"since": {since}}
+	}
 	var raw userItemsResponse
-	if err := c.getJSON(ctx, path, nil, auth, &raw); err != nil {
-		return nil, err
+	if err := c.getJSON(ctx, path, q, auth, &raw); err != nil {
+		return nil, "", err
 	}
 	out := make([]Item, 0, len(raw.Data))
 	for _, d := range raw.Data {
@@ -424,12 +494,13 @@ func (c *Client) userItems(ctx context.Context, path string, auth bool, sellerHa
 			SellerHash:  firstNonEmpty(d.UserID, sellerHash),
 			Reserved:    d.Reserved.Flag,
 			Sold:        d.Sold.Flag,
+			Expired:     d.Expired.Flag,
 			Shippable:   d.Shipping.ItemIsShippable,
 			Images:      d.Images.bigURLs(),
 			URL:         c.itemURL(d.Slug),
 		})
 	}
-	return out, nil
+	return out, raw.Meta.Next, nil
 }
 
 // MyItems lists the account's active (or sold) listings.
