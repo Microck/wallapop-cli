@@ -716,6 +716,21 @@ func TestSellerWatchDoesNotReportRemovedWhenWalkTruncates(t *testing.T) {
 	}
 }
 
+func TestSellerWatchDoesNotReportRemovedWhenCursorStalls(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	first := h.fake.AddItem(fakewallapop.Item{Hash: "hash" + padHash(0), Title: "Bike", Seller: fakewallapop.OtherHash})
+	h.must("", "watch", "add", "seller", "other-seller-68037934", "--name", "fran")
+	h.fake.AddItem(fakewallapop.Item{Hash: "hash" + padHash(1), Title: "Bike", Seller: fakewallapop.OtherHash})
+	first.Removed = true
+	h.fake.UserItemsPageSize = 1
+	h.fake.UserItemsStickyCursor = "1"
+	r := h.run("", "watch", "check", "fran", "--format", "jsonl")
+	if r.code == 0 || strings.Contains(r.stdout, `"item.removed"`) {
+		t.Fatalf("stalled walk must fail without false removals, exit %d stdout:\n%s\nstderr:\n%s", r.code, r.stdout, r.stderr)
+	}
+}
+
 // chat
 
 func TestChatSendPublishesWebShapedPayload(t *testing.T) {
