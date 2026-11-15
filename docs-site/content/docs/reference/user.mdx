@@ -13,11 +13,27 @@ Look at a seller. USER is a user hash, a profile URL, or the web slug (name-1234
 
 ## `wallapop user items`
 
-Active listings
+Active Items
 
 ```bash
-wallapop user items USER
+wallapop user items USER [flags]
 ```
+
+List a seller's active Items. Wallapop pages this endpoint 40 Items at a
+time: a plain call returns one page with its next_page cursor, --all walks
+every page (bounded at 50 pages), --next resumes from a previous cursor
+(single page, or the whole walk when combined with --all).
+
+```bash
+wallapop user items p8j35kmwr7z9
+wallapop user items p8j35kmwr7z9 --all
+wallapop user items p8j35kmwr7z9 --next "$(wallapop user items p8j35kmwr7z9 | jq -r .next_page)"
+```
+
+| Flag | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--all` | bool | `false` | walk every page until exhausted (bounded) |
+| `--next` | string | - | continue from a previous next_page token |
 
 ## `wallapop user reviews`
 

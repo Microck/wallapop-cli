@@ -137,9 +137,16 @@ func (c *Client) userStats(ctx context.Context, hash string) (UserStats, error) 
 	return s, nil
 }
 
-// UserItems lists a seller's active items.
+// UserItems lists a seller's active items (first page only).
 func (c *Client) UserItems(ctx context.Context, hash string) ([]Item, error) {
-	return c.userItems(ctx, "/api/v3/users/"+hash+"/items", false, hash)
+	items, _, err := c.UserItemsPage(ctx, hash, "")
+	return items, err
+}
+
+// UserItemsPage lists one page of a seller's active items and returns the
+// next cursor ("" when there are no more pages). Empty since = first page.
+func (c *Client) UserItemsPage(ctx context.Context, hash, since string) ([]Item, string, error) {
+	return c.userItemsPage(ctx, "/api/v3/users/"+hash+"/items", since, false, hash)
 }
 
 // UserReviews lists the reviews a user has received.
