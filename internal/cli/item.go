@@ -575,6 +575,16 @@ func (v reviewsView) Pretty(w io.Writer, color bool) {
 	output.Table(w, color, []string{"DATE", "SCORE", "BY", "ITEM", "COMMENT"}, rows)
 }
 
+// userItemsView is itemsView for `user items`, with next_page always present:
+// an absent key would be indistinguishable from a CLI without pagination, so
+// consumers reading the field explicitly get "" on the last page.
+type userItemsView struct {
+	Items    []wallapop.Item `json:"items"`
+	NextPage string          `json:"next_page"`
+}
+
+func (v userItemsView) Pretty(w io.Writer, color bool) { itemsView(v).Pretty(w, color) }
+
 func (a *App) userCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "user",
@@ -587,8 +597,8 @@ func (a *App) userCmd() *cobra.Command {
 	var itemsNext string
 	var itemsAll bool
 	var itemsCmd = &cobra.Command{
-		Use: "items USER", Short: "Active listings", Args: cobra.ExactArgs(1),
-		Long: `List a seller's active listings. Wallapop pages this endpoint 40 items at a
+		Use: "items USER", Short: "Active Items", Args: cobra.ExactArgs(1),
+		Long: `List a seller's active Items. Wallapop pages this endpoint 40 Items at a
 time: a plain call returns one page with its next_page cursor, --all walks
 every page (bounded at 50 pages), --next resumes from a previous cursor
 (single page, or the whole walk when combined with --all).
@@ -604,14 +614,18 @@ Examples:
 			}
 			if itemsAll {
 				items, truncated, err := a.allUserItems(cmd.Context(), hash, itemsNext)
+				view := userItemsView{Items: items, NextPage: truncated}
 				if err != nil {
+					// The pages already fetched are still real data: print
+					// them (with the cursor to resume from) and then fail
+					// with the request error, so a partial walk need not be
+					// repeated from the beginning.
+					_ = a.Printer.Print(view)
 					return err
 				}
-				view := itemsView{Items: items, NextPage: truncated}
 				if truncated != "" {
-					// The walk hit its bound, not the end of the list:
-					// say so on stderr, and keep the cursor in the JSON
-					// so callers can pick up where this left off.
+					// The walk hit its bound: say so on stderr, and keep the cursor in
+					// the JSON so callers can pick up where this left off.
 					fmt.Fprintf(a.Stderr, "wallapop: warning: stopped after %d pages (%d items); more pages remain, continue with --next\n", maxUserItemPages, len(items))
 				}
 				return a.Printer.Print(view)
@@ -620,7 +634,7 @@ Examples:
 			if err != nil {
 				return err
 			}
-			return a.Printer.Print(itemsView{Items: items, NextPage: cursor})
+			return a.Printer.Print(userItemsView{Items: items, NextPage: cursor})
 		},
 	}
 	itemsCmd.Flags().StringVar(&itemsNext, "next", "", "continue from a previous next_page token")
@@ -671,12 +685,19 @@ func (a *App) allUserItems(ctx context.Context, hash, since string) (items []wal
 	for page := 0; page < maxUserItemPages; page++ {
 		batch, cursor, err := a.Client.UserItemsPage(ctx, hash, since)
 		if err != nil {
-			return items, "", err
+			// Keep what succeeded and the cursor to resume from; the caller
+			// prints the partial result and still reports this error.
+			return items, since, err
 		}
 		items = append(items, batch...)
-		// A cursor repeated unchanged would loop forever; treat it as done.
-		if cursor == "" || cursor == since {
+		if cursor == "" {
 			return items, "", nil
+		}
+		// A cursor repeated unchanged means the API stopped advancing the
+		// walk: report it as truncated (not exhausted) so the caller warns
+		// and can resume, instead of seeing an incomplete walk as complete.
+		if cursor == since {
+			return items, since, fmt.Errorf("user items pagination cursor did not advance (since=%q)", since)
 		}
 		since = cursor
 	}

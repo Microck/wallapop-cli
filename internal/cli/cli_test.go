@@ -554,13 +554,13 @@ func TestUserItemsReturnsPageWithNextCursor(t *testing.T) {
 	}
 
 	r = h.must("", "user", "items", fakewallapop.OtherHash, "--next", page.NextPage)
-	var last struct {
-		Items    []struct{ Hash string }
-		NextPage string `json:"next_page"`
-	}
+	var last map[string]any
 	decode(t, r.stdout, &last)
-	if len(last.Items) != 1 || last.NextPage != "" {
-		t.Fatalf("last page: %d items, next %q", len(last.Items), last.NextPage)
+	if got, ok := last["next_page"]; !ok || got != "" {
+		t.Fatalf("last page must carry an empty next_page key, got %q present=%v", got, ok)
+	}
+	if n := len(last["items"].([]any)); n != 1 {
+		t.Fatalf("last page: %d items", n)
 	}
 }
 
@@ -579,6 +579,14 @@ func TestUserItemsAllWalksEveryPage(t *testing.T) {
 	decode(t, r.stdout, &page)
 	if len(page.Items) != 5 || page.NextPage != "" {
 		t.Fatalf("got %d items, next %q", len(page.Items), page.NextPage)
+	}
+	// Count alone would let a duplicate hide an omission: assert the whole
+	// ordered listing.
+	want := []string{"hash00000000", "hash00000001", "hash00000002", "hash00000003", "hash00000004"}
+	for i, it := range page.Items {
+		if it.Hash != want[i] {
+			t.Fatalf("item %d = %s, want %s", i, it.Hash, want[i])
+		}
 	}
 	if n := len(h.fake.RequestsTo("/api/v3/users/" + fakewallapop.OtherHash + "/items")); n != 3 {
 		t.Fatalf("expected 3 sequential page requests, got %d", n)
@@ -601,7 +609,7 @@ func TestUserItemsAllStopsAtBoundWithWarning(t *testing.T) {
 		NextPage string `json:"next_page"`
 	}
 	decode(t, r.stdout, &page)
-	if len(page.Items) != 50 || page.NextPage == "" {
+	if len(page.Items) != 50 || page.NextPage != "50" {
 		t.Fatalf("bound walk: %d items, next %q", len(page.Items), page.NextPage)
 	}
 	if !strings.Contains(r.stderr, "stopped after 50 pages") {
@@ -609,6 +617,58 @@ func TestUserItemsAllStopsAtBoundWithWarning(t *testing.T) {
 	}
 	if n := len(h.fake.RequestsTo("/api/v3/users/" + fakewallapop.OtherHash + "/items")); n != 50 {
 		t.Fatalf("expected bounded 50 requests, got %d", n)
+	}
+	resume := h.must("", "user", "items", fakewallapop.OtherHash, "--next", page.NextPage)
+	var resumed struct {
+		Items []struct{ Hash string } `json:"items"`
+	}
+	decode(t, resume.stdout, &resumed)
+	if len(resumed.Items) != 1 || resumed.Items[0].Hash != "hash00000050" {
+		t.Fatalf("resume from %q returned %d items starting at %q", page.NextPage, len(resumed.Items), resumed.Items[0].Hash)
+	}
+}
+
+func TestUserItemsAllRejectsRepeatedCursor(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.UserItemsPageSize = 1
+	h.fake.UserItemsStickyCursor = "1"
+	for i := 0; i < 3; i++ {
+		h.fake.AddItem(fakewallapop.Item{Hash: "hash" + padHash(i), Title: "Bike", Seller: fakewallapop.OtherHash})
+	}
+	r := h.run("", "user", "items", fakewallapop.OtherHash, "--all")
+	if r.code == 0 || !strings.Contains(r.stderr, "cursor did not advance") {
+		t.Fatalf("expected stalled cursor error, exit %d stderr %q", r.code, r.stderr)
+	}
+	var partial struct {
+		Items []struct{ Hash string } `json:"items"`
+		Next  string                  `json:"next_page"`
+	}
+	decode(t, r.stdout, &partial)
+	if len(partial.Items) != 2 || partial.Next != "1" {
+		t.Fatalf("stalled walk lost partial results/cursor: %+v", partial)
+	}
+}
+
+func TestUserItemsAllPreservesPagesWhenLaterRequestFails(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.UserItemsPageSize = 2
+	h.fake.UserItemsFailSince = "2"
+	for i := 0; i < 5; i++ {
+		h.fake.AddItem(fakewallapop.Item{Hash: "hash" + padHash(i), Title: "Bike", Seller: fakewallapop.OtherHash})
+	}
+	r := h.run("", "user", "items", fakewallapop.OtherHash, "--all")
+	if r.code == 0 || !strings.Contains(r.stderr, "500") {
+		t.Fatalf("expected later-page error, exit %d stderr %q", r.code, r.stderr)
+	}
+	var partial struct {
+		Items []struct{ Hash string } `json:"items"`
+		Next  string                  `json:"next_page"`
+	}
+	decode(t, r.stdout, &partial)
+	if len(partial.Items) != 2 || partial.Next != "2" {
+		t.Fatalf("failed walk lost partial results/cursor: %+v", partial)
 	}
 }
 

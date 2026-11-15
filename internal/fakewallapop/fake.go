@@ -125,9 +125,15 @@ type Server struct {
 	NewItemPageLags bool
 	// UserItemsPageSize pages /user/items via meta.next and ?since= (zero: one page).
 	UserItemsPageSize int
-	Uploads           map[string]int // pictures received per upload id
-	WebhookStatus     int            // status for POST /hook (0 = 200)
-	Hooks             []json.RawMessage
+	// UserItemsStickyCursor overrides meta.next with this value on every
+	// page, modelling an API whose cursor never advances.
+	UserItemsStickyCursor string
+	// UserItemsFailSince makes the user-items endpoint answer 500 when the
+	// request's since equals this value (the walk's later pages fail).
+	UserItemsFailSince string
+	Uploads            map[string]int // pictures received per upload id
+	WebhookStatus      int            // status for POST /hook (0 = 200)
+	Hooks              []json.RawMessage
 }
 
 func New() *Server {
@@ -255,12 +261,17 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 				data = append(data, s.userItemJSON(it))
 			}
 		}
+		failSince, pageSize, stickyCursor := s.UserItemsFailSince, s.UserItemsPageSize, s.UserItemsStickyCursor
 		s.mu.Unlock()
 		if data == nil {
 			data = []map[string]any{}
 		}
+		if q := r.URL.Query().Get("since"); failSince != "" && q == failSince {
+			writeJSON(w, 500, map[string]any{"code": 500, "message": "fake failure"})
+			return
+		}
 		meta := map[string]any{}
-		if n := s.UserItemsPageSize; n > 0 && p != "/api/v3/user/items/favorited" {
+		if n := pageSize; n > 0 && p != "/api/v3/user/items/favorited" {
 			start, _ := strconv.Atoi(r.URL.Query().Get("since"))
 			start = min(max(start, 0), len(data))
 			end := min(start+n, len(data))
@@ -268,6 +279,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 				meta["next"] = strconv.Itoa(end)
 			}
 			data = data[start:end]
+		}
+		if stickyCursor != "" && p != "/api/v3/user/items/favorited" {
+			meta["next"] = stickyCursor
 		}
 		writeJSON(w, 200, map[string]any{"data": data, "meta": meta})
 	case p == "/api/v3/items" && r.Method == http.MethodPost:
@@ -524,12 +538,17 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 				data = append(data, s.userItemJSON(it))
 			}
 		}
+		failSince, pageSize, stickyCursor := s.UserItemsFailSince, s.UserItemsPageSize, s.UserItemsStickyCursor
 		s.mu.Unlock()
 		if data == nil {
 			data = []map[string]any{}
 		}
+		if q := r.URL.Query().Get("since"); failSince != "" && q == failSince {
+			writeJSON(w, 500, map[string]any{"code": 500, "message": "fake failure"})
+			return
+		}
 		meta := map[string]any{}
-		if n := s.UserItemsPageSize; n > 0 {
+		if n := pageSize; n > 0 {
 			start, _ := strconv.Atoi(r.URL.Query().Get("since"))
 			start = min(max(start, 0), len(data))
 			end := min(start+n, len(data))
@@ -537,6 +556,9 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 				meta["next"] = strconv.Itoa(end)
 			}
 			data = data[start:end]
+		}
+		if stickyCursor != "" {
+			meta["next"] = stickyCursor
 		}
 		writeJSON(w, 200, map[string]any{"data": data, "meta": meta})
 	case "stats":
