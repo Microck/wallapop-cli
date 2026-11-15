@@ -672,6 +672,50 @@ func TestUserItemsAllPreservesPagesWhenLaterRequestFails(t *testing.T) {
 	}
 }
 
+// watch seller pagination (UserItemsAll)
+
+func TestSellerWatchWalksAllPages(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.UserItemsPageSize = 2
+	var items []*fakewallapop.Item
+	for i := 0; i < 3; i++ {
+		items = append(items, h.fake.AddItem(fakewallapop.Item{Hash: "hash" + padHash(i), Title: "Bike", Seller: fakewallapop.OtherHash}))
+	}
+	h.must("", "watch", "add", "seller", "other-seller-68037934", "--name", "fran")
+	// The third item lives on page 2; removing a page-1 item must not
+	// ghost-remove it, and the real removal is reported exactly once.
+	items[0].Removed = true
+	r := h.must("", "watch", "check", "fran", "--format", "jsonl")
+	if strings.Count(r.stdout, `"item.removed"`) != 1 || !strings.Contains(r.stdout, "hash00000000") {
+		t.Fatalf("events:\n%s", r.stdout)
+	}
+	// The page-2 item is tracked: its removal is seen on the next check.
+	items[2].Removed = true
+	r = h.must("", "watch", "check", "fran", "--format", "jsonl")
+	if strings.Count(r.stdout, `"item.removed"`) != 1 || !strings.Contains(r.stdout, "hash00000002") {
+		t.Fatalf("page-2 item not tracked:\n%s", r.stdout)
+	}
+}
+
+func TestSellerWatchDoesNotReportRemovedWhenWalkTruncates(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.UserItemsPageSize = 1
+	for i := 0; i < 55; i++ {
+		h.fake.AddItem(fakewallapop.Item{Hash: "hash" + padHash(i), Title: "Bike", Seller: fakewallapop.OtherHash})
+	}
+	h.must("", "watch", "add", "seller", "other-seller-68037934", "--name", "fran")
+	r := h.must("", "watch", "check", "fran")
+	if strings.Contains(r.stdout, `"item.removed"`) {
+		t.Fatalf("truncated walk must not report removals:\n%s", r.stdout)
+	}
+	// Both the baseline check (at add) and this check walked the bound.
+	if n := len(h.fake.RequestsTo("/api/v3/users/" + fakewallapop.OtherHash + "/items")); n != 100 {
+		t.Fatalf("expected bounded 50 page requests per check, got %d", n)
+	}
+}
+
 // chat
 
 func TestChatSendPublishesWebShapedPayload(t *testing.T) {

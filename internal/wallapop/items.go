@@ -114,7 +114,7 @@ func (c *Client) MyItem(ctx context.Context, ref string) (Item, error) {
 	}
 	next := ""
 	more := false
-	for page := 0; page < maxOwnItemPages; page++ {
+	for page := 0; page < MaxItemWalkPages; page++ {
 		mine, cursor, err := c.userItemsPage(ctx, "/api/v3/user/items", next, true, "")
 		if err != nil {
 			return Item{}, err
@@ -131,13 +131,15 @@ func (c *Client) MyItem(ctx context.Context, ref string) (Item, error) {
 		next = cursor
 	}
 	if more {
-		return Item{}, Usage("%s was not found in the first %d pages of your listings", ref, maxOwnItemPages)
+		return Item{}, Usage("%s was not found in the first %d pages of your listings", ref, MaxItemWalkPages)
 	}
 	return Item{}, Usage("%s is not one of your listings (see `wallapop me items`)", ref)
 }
 
-// maxOwnItemPages bounds the walk through /user/items (40 per page).
-const maxOwnItemPages = 50
+// MaxItemWalkPages bounds every walk over the 40-per-page items endpoints:
+// MyItem's search through the account's listings and UserItemsAll's walk
+// through a seller's listings.
+const MaxItemWalkPages = 50
 
 // slugMatches compares a canonical slug ("old-thing-123") with a reference
 // that is either that slug or its trailing numeric id ("123").

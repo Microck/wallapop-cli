@@ -191,7 +191,7 @@ func isExpired(prev store.Seen) bool {
 
 func checkSeller(ctx context.Context, c *wallapop.Client, w store.Watch, t SellerTarget, seen map[string]store.Seen, baseline bool) (Result, error) {
 	var res Result
-	items, err := c.UserItems(ctx, t.Hash)
+	items, truncated, err := c.UserItemsAll(ctx, t.Hash, "")
 	if err != nil {
 		return Result{}, err
 	}
@@ -207,13 +207,18 @@ func checkSeller(ctx context.Context, c *wallapop.Client, w store.Watch, t Selle
 		}
 		res.Upserts = append(res.Upserts, seenOf(it))
 	}
-	// The seller's list is complete, so a missing hash really is gone.
-	for hash, prev := range seen {
-		if !current[hash] {
-			var last wallapop.Item
-			_ = json.Unmarshal(prev.Snapshot, &last)
-			res.Events = append(res.Events, event(w, "item.removed", last, nil))
-			res.Removed = append(res.Removed, hash)
+	// The walk is complete, so a missing hash really is gone. When the bound
+	// truncated it, hashes outside the fetched pages may just sit on a later
+	// page: reporting them gone would be a false alarm, so stay silent and
+	// wait for a walk that fits (the seller may list less) or the next check.
+	if truncated == "" {
+		for hash, prev := range seen {
+			if !current[hash] {
+				var last wallapop.Item
+				_ = json.Unmarshal(prev.Snapshot, &last)
+				res.Events = append(res.Events, event(w, "item.removed", last, nil))
+				res.Removed = append(res.Removed, hash)
+			}
 		}
 	}
 	return res, nil

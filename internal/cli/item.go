@@ -613,7 +613,7 @@ Examples:
 				return err
 			}
 			if itemsAll {
-				items, truncated, err := a.allUserItems(cmd.Context(), hash, itemsNext)
+				items, truncated, err := a.Client.UserItemsAll(cmd.Context(), hash, itemsNext)
 				view := userItemsView{Items: items, NextPage: truncated}
 				if err != nil {
 					// The pages already fetched are still real data: print
@@ -624,9 +624,10 @@ Examples:
 					return err
 				}
 				if truncated != "" {
-					// The walk hit its bound: say so on stderr, and keep the cursor in
-					// the JSON so callers can pick up where this left off.
-					fmt.Fprintf(a.Stderr, "wallapop: warning: stopped after %d pages (%d items); more pages remain, continue with --next\n", maxUserItemPages, len(items))
+					// The walk hit its bound, not the end of the list:
+					// say so on stderr, and keep the cursor in the JSON
+					// so callers can pick up where this left off.
+					fmt.Fprintf(a.Stderr, "wallapop: warning: stopped after %d pages (%d items); more pages remain, continue with --next\n", wallapop.MaxItemWalkPages, len(items))
 				}
 				return a.Printer.Print(view)
 			}
@@ -671,37 +672,6 @@ Examples:
 		},
 	)
 	return cmd
-}
-
-// maxUserItemPages bounds `user items --all` (40 items per page, so 2000
-// items at most); hitting it is a warning, not an error.
-const maxUserItemPages = 50
-
-// allUserItems walks a seller's pages sequentially, from since ("" = start)
-// until the cursor runs out or the bound is hit. When truncated, it returns
-// the last cursor so the caller can warn and let consumers resume.
-func (a *App) allUserItems(ctx context.Context, hash, since string) (items []wallapop.Item, truncated string, err error) {
-	items = []wallapop.Item{}
-	for page := 0; page < maxUserItemPages; page++ {
-		batch, cursor, err := a.Client.UserItemsPage(ctx, hash, since)
-		if err != nil {
-			// Keep what succeeded and the cursor to resume from; the caller
-			// prints the partial result and still reports this error.
-			return items, since, err
-		}
-		items = append(items, batch...)
-		if cursor == "" {
-			return items, "", nil
-		}
-		// A cursor repeated unchanged means the API stopped advancing the
-		// walk: report it as truncated (not exhausted) so the caller warns
-		// and can resume, instead of seeing an incomplete walk as complete.
-		if cursor == since {
-			return items, since, fmt.Errorf("user items pagination cursor did not advance (since=%q)", since)
-		}
-		since = cursor
-	}
-	return items, since, nil
 }
 
 func (a *App) meCmd() *cobra.Command {
