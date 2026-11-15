@@ -528,7 +528,17 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 		if data == nil {
 			data = []map[string]any{}
 		}
-		writeJSON(w, 200, map[string]any{"data": data, "meta": map[string]any{}})
+		meta := map[string]any{}
+		if n := s.UserItemsPageSize; n > 0 {
+			start, _ := strconv.Atoi(r.URL.Query().Get("since"))
+			start = min(max(start, 0), len(data))
+			end := min(start+n, len(data))
+			if end < len(data) {
+				meta["next"] = strconv.Itoa(end)
+			}
+			data = data[start:end]
+		}
+		writeJSON(w, 200, map[string]any{"data": data, "meta": meta})
 	case "stats":
 		writeJSON(w, 200, map[string]any{"ratings": []map[string]any{{"type": "reviews", "value": 97}}, "counters": []map[string]any{{"type": "sold", "value": 36}, {"type": "publish", "value": 9}}, "rating_average": 4.9})
 	case "reviews":

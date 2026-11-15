@@ -584,6 +584,47 @@ func (a *App) userCmd() *cobra.Command {
 	resolve := func(cmd *cobra.Command, ref string) (string, error) {
 		return a.Client.ResolveUserHash(cmd.Context(), ref)
 	}
+	var itemsNext string
+	var itemsAll bool
+	var itemsCmd = &cobra.Command{
+		Use: "items USER", Short: "Active listings", Args: cobra.ExactArgs(1),
+		Long: `List a seller's active listings. Wallapop pages this endpoint 40 items at a
+time: a plain call returns one page with its next_page cursor, --all walks
+every page (bounded at 50 pages), --next resumes from a previous cursor
+(single page, or the whole walk when combined with --all).
+
+Examples:
+  wallapop user items p8j35kmwr7z9
+  wallapop user items p8j35kmwr7z9 --all
+  wallapop user items p8j35kmwr7z9 --next "$(wallapop user items p8j35kmwr7z9 | jq -r .next_page)"`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			hash, err := resolve(cmd, args[0])
+			if err != nil {
+				return err
+			}
+			if itemsAll {
+				items, truncated, err := a.allUserItems(cmd.Context(), hash, itemsNext)
+				if err != nil {
+					return err
+				}
+				view := itemsView{Items: items, NextPage: truncated}
+				if truncated != "" {
+					// The walk hit its bound, not the end of the list:
+					// say so on stderr, and keep the cursor in the JSON
+					// so callers can pick up where this left off.
+					fmt.Fprintf(a.Stderr, "wallapop: warning: stopped after %d pages (%d items); more pages remain, continue with --next\n", maxUserItemPages, len(items))
+				}
+				return a.Printer.Print(view)
+			}
+			items, cursor, err := a.Client.UserItemsPage(cmd.Context(), hash, itemsNext)
+			if err != nil {
+				return err
+			}
+			return a.Printer.Print(itemsView{Items: items, NextPage: cursor})
+		},
+	}
+	itemsCmd.Flags().StringVar(&itemsNext, "next", "", "continue from a previous next_page token")
+	itemsCmd.Flags().BoolVar(&itemsAll, "all", false, "walk every page until exhausted (bounded)")
 	cmd.AddCommand(
 		&cobra.Command{
 			Use: "show USER", Short: "Profile and stats", Args: cobra.ExactArgs(1),
@@ -599,20 +640,7 @@ func (a *App) userCmd() *cobra.Command {
 				return a.Printer.Print(userView(u))
 			},
 		},
-		&cobra.Command{
-			Use: "items USER", Short: "Active listings", Args: cobra.ExactArgs(1),
-			RunE: func(cmd *cobra.Command, args []string) error {
-				hash, err := resolve(cmd, args[0])
-				if err != nil {
-					return err
-				}
-				items, err := a.Client.UserItems(cmd.Context(), hash)
-				if err != nil {
-					return err
-				}
-				return a.Printer.Print(itemsView{Items: items})
-			},
-		},
+		itemsCmd,
 		&cobra.Command{
 			Use: "reviews USER", Short: "Reviews received", Args: cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
@@ -629,6 +657,30 @@ func (a *App) userCmd() *cobra.Command {
 		},
 	)
 	return cmd
+}
+
+// maxUserItemPages bounds `user items --all` (40 items per page, so 2000
+// items at most); hitting it is a warning, not an error.
+const maxUserItemPages = 50
+
+// allUserItems walks a seller's pages sequentially, from since ("" = start)
+// until the cursor runs out or the bound is hit. When truncated, it returns
+// the last cursor so the caller can warn and let consumers resume.
+func (a *App) allUserItems(ctx context.Context, hash, since string) (items []wallapop.Item, truncated string, err error) {
+	items = []wallapop.Item{}
+	for page := 0; page < maxUserItemPages; page++ {
+		batch, cursor, err := a.Client.UserItemsPage(ctx, hash, since)
+		if err != nil {
+			return items, "", err
+		}
+		items = append(items, batch...)
+		// A cursor repeated unchanged would loop forever; treat it as done.
+		if cursor == "" || cursor == since {
+			return items, "", nil
+		}
+		since = cursor
+	}
+	return items, since, nil
 }
 
 func (a *App) meCmd() *cobra.Command {

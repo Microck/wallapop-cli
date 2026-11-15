@@ -516,6 +516,102 @@ func TestUserBySlugURLAndHash(t *testing.T) {
 	}
 }
 
+// user items pagination
+
+func TestUserItemsReturnsPageWithNextCursor(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.UserItemsPageSize = 2
+	for i := 0; i < 5; i++ {
+		h.fake.AddItem(fakewallapop.Item{Hash: "hash" + padHash(i), Title: "Bike", Seller: fakewallapop.OtherHash})
+	}
+	r := h.must("", "user", "items", fakewallapop.OtherHash)
+	var page struct {
+		Items    []struct{ Hash string }
+		NextPage string `json:"next_page"`
+	}
+	decode(t, r.stdout, &page)
+	if len(page.Items) != 2 || page.NextPage == "" {
+		t.Fatalf("got %d items, next %q", len(page.Items), page.NextPage)
+	}
+	reqs := h.fake.RequestsTo("/api/v3/users/" + fakewallapop.OtherHash + "/items")
+	if len(reqs) != 1 || reqs[0].Query.Get("since") != "" {
+		t.Fatalf("first page request: %d, query %v", len(reqs), reqs[0].Query)
+	}
+	next := page.NextPage
+
+	r = h.must("", "user", "items", fakewallapop.OtherHash, "--next", next)
+	decode(t, r.stdout, &page)
+	if len(page.Items) != 2 {
+		t.Fatalf("second page got %d items", len(page.Items))
+	}
+	reqs = h.fake.RequestsTo("/api/v3/users/" + fakewallapop.OtherHash + "/items")
+	if len(reqs) != 2 || reqs[1].Query.Get("since") != next {
+		t.Fatalf("second page did not pass since=%q: %v", next, reqs[len(reqs)-1].Query)
+	}
+	if page.NextPage == "" {
+		t.Fatal("second page lost the next cursor")
+	}
+
+	r = h.must("", "user", "items", fakewallapop.OtherHash, "--next", page.NextPage)
+	var last struct {
+		Items    []struct{ Hash string }
+		NextPage string `json:"next_page"`
+	}
+	decode(t, r.stdout, &last)
+	if len(last.Items) != 1 || last.NextPage != "" {
+		t.Fatalf("last page: %d items, next %q", len(last.Items), last.NextPage)
+	}
+}
+
+func TestUserItemsAllWalksEveryPage(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.UserItemsPageSize = 2
+	for i := 0; i < 5; i++ {
+		h.fake.AddItem(fakewallapop.Item{Hash: "hash" + padHash(i), Title: "Bike", Seller: fakewallapop.OtherHash})
+	}
+	r := h.must("", "user", "items", fakewallapop.OtherHash, "--all")
+	var page struct {
+		Items    []struct{ Hash string }
+		NextPage string `json:"next_page"`
+	}
+	decode(t, r.stdout, &page)
+	if len(page.Items) != 5 || page.NextPage != "" {
+		t.Fatalf("got %d items, next %q", len(page.Items), page.NextPage)
+	}
+	if n := len(h.fake.RequestsTo("/api/v3/users/" + fakewallapop.OtherHash + "/items")); n != 3 {
+		t.Fatalf("expected 3 sequential page requests, got %d", n)
+	}
+	if strings.Contains(r.stderr, "warning") {
+		t.Fatalf("unexpected warning: %s", r.stderr)
+	}
+}
+
+func TestUserItemsAllStopsAtBoundWithWarning(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.fake.UserItemsPageSize = 1
+	for i := 0; i < 60; i++ {
+		h.fake.AddItem(fakewallapop.Item{Hash: "hash" + padHash(i), Title: "Bike", Seller: fakewallapop.OtherHash})
+	}
+	r := h.must("", "user", "items", fakewallapop.OtherHash, "--all")
+	var page struct {
+		Items    []struct{ Hash string }
+		NextPage string `json:"next_page"`
+	}
+	decode(t, r.stdout, &page)
+	if len(page.Items) != 50 || page.NextPage == "" {
+		t.Fatalf("bound walk: %d items, next %q", len(page.Items), page.NextPage)
+	}
+	if !strings.Contains(r.stderr, "stopped after 50 pages") {
+		t.Fatalf("missing bound warning: %s", r.stderr)
+	}
+	if n := len(h.fake.RequestsTo("/api/v3/users/" + fakewallapop.OtherHash + "/items")); n != 50 {
+		t.Fatalf("expected bounded 50 requests, got %d", n)
+	}
+}
+
 // chat
 
 func TestChatSendPublishesWebShapedPayload(t *testing.T) {
