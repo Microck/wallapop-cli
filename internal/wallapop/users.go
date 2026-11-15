@@ -3,6 +3,7 @@ package wallapop
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 )
@@ -147,6 +148,33 @@ func (c *Client) UserItems(ctx context.Context, hash string) ([]Item, error) {
 // next cursor ("" when there are no more pages). Empty since = first page.
 func (c *Client) UserItemsPage(ctx context.Context, hash, since string) ([]Item, string, error) {
 	return c.userItemsPage(ctx, "/api/v3/users/"+hash+"/items", since, false, hash)
+}
+
+// UserItemsAll walks a seller's pages sequentially, from since ("" = start),
+// until the cursor runs out or MaxItemWalkPages is hit. truncated carries the
+// last cursor when the bound was reached ("" otherwise), so callers can tell
+// an exhausted list from a bounded one and resume later.
+func (c *Client) UserItemsAll(ctx context.Context, hash, since string) (items []Item, truncated string, err error) {
+	items = []Item{}
+	for page := 0; page < MaxItemWalkPages; page++ {
+		batch, cursor, err := c.UserItemsPage(ctx, hash, since)
+		if err != nil {
+			// Keep successful pages and the cursor for the failed request so
+			// callers can expose partial results and resume without restarting.
+			return items, since, err
+		}
+		items = append(items, batch...)
+		if cursor == "" {
+			return items, "", nil
+		}
+		// A repeated nonempty cursor is a stalled, incomplete walk, not
+		// successful exhaustion. Preserve it for callers and stop the loop.
+		if cursor == since {
+			return items, since, fmt.Errorf("user items pagination cursor did not advance (since=%q)", since)
+		}
+		since = cursor
+	}
+	return items, since, nil
 }
 
 // UserReviews lists the reviews a user has received.
